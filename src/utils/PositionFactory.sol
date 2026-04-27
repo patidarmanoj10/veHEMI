@@ -104,7 +104,7 @@ contract PositionFactory is Ownable2Step, ReentrancyGuard {
     /// @param user_ Beneficiary of the minted veHEMI NFT.
     /// @param amount_ HEMI amount to lock (must match the whitelisted value byte-for-byte).
     /// @param duration_ Lock duration in seconds (must match the whitelisted value).
-    /// @param transferable_ Forwarded to `createLockFor`; false produces a locked position
+    /// @param transferable_ Forwarded to `createLockFor`; false produces a non-transferable position
     ///        with `transferableAfter = unlockTime`.
     /// @param forfeitable_ Forwarded to `createLockFor`; true allows the forfeit admin to
     ///        claw the position back during its non-transferability window.

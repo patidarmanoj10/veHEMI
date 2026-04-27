@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import "./LockedCurveTestBase.sol";
+import "./NonTransferableCurveTestBase.sol";
 import "../src/storage/VeHemiStorageV2.sol";
 
 /// @title VeHemiStressTest
@@ -17,7 +17,7 @@ import "../src/storage/VeHemiStorageV2.sol";
 ///         All comparisons use assertEq (exact equality). The shadow and contract produce
 ///         identical results because both use the same integer division for slopes and the
 ///         contract's aggregate tracking is algebraically equivalent to per-position summation.
-contract VeHemiStressTest is LockedCurveTestBase {
+contract VeHemiStressTest is NonTransferableCurveTestBase {
     uint256 constant MIN_AMOUNT = 11 ether;
 
     // ── Shadow accounting ────────────────────────────────────────────────
@@ -38,7 +38,7 @@ contract VeHemiStressTest is LockedCurveTestBase {
     }
 
     ShadowPosition[] internal shadows;
-    uint256[] internal lockedTokenIds; // for seeding (only locked + forfeitable)
+    uint256[] internal nonTransferableTokenIds; // for seeding (only non-transferable + forfeitable)
 
     // Users beyond alice/bob/charlie
     address[] internal testUsers;
@@ -96,7 +96,7 @@ contract VeHemiStressTest is LockedCurveTestBase {
         }));
 
         if (posType != PosType.Transferable) {
-            lockedTokenIds.push(tokenId);
+            nonTransferableTokenIds.push(tokenId);
         }
     }
 
@@ -140,7 +140,7 @@ contract VeHemiStressTest is LockedCurveTestBase {
         return _expectedSupply(t, FILTER_ALL);
     }
 
-    function _expectedLockedSupply(uint256 t) internal view returns (uint256) {
+    function _expectedNonTransferableSupply(uint256 t) internal view returns (uint256) {
         return _expectedSupply(t, FILTER_LOCKED);
     }
 
@@ -161,28 +161,28 @@ contract VeHemiStressTest is LockedCurveTestBase {
         uint256 t = block.timestamp;
 
         uint256 expectedTotal = _expectedTotalSupply(t);
-        uint256 expectedLocked = _expectedLockedSupply(t);
+        uint256 expectedNonTransferable = _expectedNonTransferableSupply(t);
         uint256 expectedForfeitable = _expectedForfeitableSupply(t);
 
         // Exact equality against shadow accounting
         uint256 actualTotal = veHemi.totalVeHemiSupply();
-        uint256 actualLocked = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 actualNonTransferable = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 actualForfeitable = veHemi.forfeitableTotalVeHemiSupply();
 
         assertEq(actualTotal, expectedTotal, string.concat(label, ": total"));
-        assertEq(actualLocked, expectedLocked, string.concat(label, ": locked"));
+        assertEq(actualNonTransferable, expectedNonTransferable, string.concat(label, ": locked"));
         assertEq(actualForfeitable, expectedForfeitable, string.concat(label, ": forfeitable"));
 
         // Ordering invariants
-        assertLe(actualForfeitable, actualLocked, string.concat(label, ": forfeitable <= locked"));
-        assertLe(actualLocked, actualTotal, string.concat(label, ": locked <= total"));
+        assertLe(actualForfeitable, actualNonTransferable, string.concat(label, ": forfeitable <= locked"));
+        assertLe(actualNonTransferable, actualTotal, string.concat(label, ": locked <= total"));
 
         // supplyBreakdown cross-check against individual functions
-        (uint256 bdTotal, uint256 bdLocked, uint256 bdForf, uint256 bdTrans) = veHemi.supplyBreakdown();
+        (uint256 bdTotal, uint256 bdNonTransferable, uint256 bdForf, uint256 bdTrans) = veHemi.supplyBreakdown();
         assertEq(bdTotal, actualTotal, string.concat(label, ": breakdown total"));
-        assertEq(bdLocked, actualLocked, string.concat(label, ": breakdown locked"));
+        assertEq(bdNonTransferable, actualNonTransferable, string.concat(label, ": breakdown locked"));
         assertEq(bdForf, actualForfeitable, string.concat(label, ": breakdown forfeitable"));
-        assertEq(bdTrans, actualTotal - actualLocked, string.concat(label, ": breakdown transferable"));
+        assertEq(bdTrans, actualTotal - actualNonTransferable, string.concat(label, ": breakdown transferable"));
 
         // Token conservation: totalLocked == HEMI balance held by contract
         assertEq(hemi.balanceOf(address(veHemi)), veHemi.totalLocked(), string.concat(label, ": token conservation"));
@@ -194,20 +194,20 @@ contract VeHemiStressTest is LockedCurveTestBase {
     /// @dev Historical query verification with exact equality + ordering invariants.
     function _verifyAt(string memory label, uint256 t) internal view {
         uint256 expectedTotal = _expectedTotalSupply(t);
-        uint256 expectedLocked = _expectedLockedSupply(t);
+        uint256 expectedNonTransferable = _expectedNonTransferableSupply(t);
         uint256 expectedForfeitable = _expectedForfeitableSupply(t);
 
         uint256 actualTotal = veHemi.totalVeHemiSupplyAt(t);
-        uint256 actualLocked = veHemi.nonTransferableTotalVeHemiSupplyAt(t);
+        uint256 actualNonTransferable = veHemi.nonTransferableTotalVeHemiSupplyAt(t);
         uint256 actualForfeitable = veHemi.forfeitableTotalVeHemiSupplyAt(t);
 
         assertEq(actualTotal, expectedTotal, string.concat(label, ": total"));
-        assertEq(actualLocked, expectedLocked, string.concat(label, ": locked"));
+        assertEq(actualNonTransferable, expectedNonTransferable, string.concat(label, ": locked"));
         assertEq(actualForfeitable, expectedForfeitable, string.concat(label, ": forfeitable"));
 
         // Ordering must hold at all historical timestamps too
-        assertLe(actualForfeitable, actualLocked, string.concat(label, ": hist forfeitable <= locked"));
-        assertLe(actualLocked, actualTotal, string.concat(label, ": hist locked <= total"));
+        assertLe(actualForfeitable, actualNonTransferable, string.concat(label, ": hist forfeitable <= locked"));
+        assertLe(actualNonTransferable, actualTotal, string.concat(label, ": hist locked <= total"));
     }
 
     /// @dev Verify WITHOUT a preceding checkpoint — forces the view functions to execute
@@ -216,20 +216,20 @@ contract VeHemiStressTest is LockedCurveTestBase {
         uint256 t = block.timestamp;
 
         uint256 expectedTotal = _expectedTotalSupply(t);
-        uint256 expectedLocked = _expectedLockedSupply(t);
+        uint256 expectedNonTransferable = _expectedNonTransferableSupply(t);
         uint256 expectedForfeitable = _expectedForfeitableSupply(t);
 
         assertEq(veHemi.totalVeHemiSupply(), expectedTotal, string.concat(label, ": total (no cp)"));
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), expectedLocked, string.concat(label, ": locked (no cp)"));
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), expectedNonTransferable, string.concat(label, ": locked (no cp)"));
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), expectedForfeitable, string.concat(label, ": forfeitable (no cp)"));
     }
 
     // ── Sort helper for seeding ──────────────────────────────────────────
 
-    function _sortedLockedTokenIds() internal view returns (uint256[] memory sorted) {
-        sorted = new uint256[](lockedTokenIds.length);
-        for (uint256 i; i < lockedTokenIds.length; i++) {
-            sorted[i] = lockedTokenIds[i];
+    function _sortedNonTransferableTokenIds() internal view returns (uint256[] memory sorted) {
+        sorted = new uint256[](nonTransferableTokenIds.length);
+        for (uint256 i; i < nonTransferableTokenIds.length; i++) {
+            sorted[i] = nonTransferableTokenIds[i];
         }
         for (uint256 i = 1; i < sorted.length; i++) {
             uint256 key = sorted[i];
@@ -261,7 +261,7 @@ contract VeHemiStressTest is LockedCurveTestBase {
             _createPos(user, amount, duration, ptype);
         }
 
-        veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        veHemi.seedAndFinalizeNonTransferablePositions(_sortedNonTransferableTokenIds());
         _verify("After 100 positions + seed");
 
         uint256 t0 = block.timestamp;
@@ -307,13 +307,13 @@ contract VeHemiStressTest is LockedCurveTestBase {
         }
 
         // Phase 2: Seed and snapshot
-        veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        veHemi.seedAndFinalizeNonTransferablePositions(_sortedNonTransferableTokenIds());
         _verify("After 200 positions + seed");
 
         // Snapshot t0 expected values BEFORE any mutations
         uint256 t0 = block.timestamp;
         uint256 t0ExpTotal = _expectedTotalSupply(t0);
-        uint256 t0ExpLocked = _expectedLockedSupply(t0);
+        uint256 t0ExpNonTransferable = _expectedNonTransferableSupply(t0);
         uint256 t0ExpForf = _expectedForfeitableSupply(t0);
 
         // Phase 3: Warp 90 days
@@ -429,7 +429,7 @@ contract VeHemiStressTest is LockedCurveTestBase {
         // Phase 10: Verify historical queries at t0 using snapshotted expected values
         // (shadow was mutated by increaseAmount/increaseUnlockTime, so we use pre-mutation snapshots)
         assertEq(veHemi.totalVeHemiSupplyAt(t0), t0ExpTotal, "Historical total at t0");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupplyAt(t0), t0ExpLocked, "Historical locked at t0");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupplyAt(t0), t0ExpNonTransferable, "Historical non-transferable at t0");
         assertEq(veHemi.forfeitableTotalVeHemiSupplyAt(t0), t0ExpForf, "Historical forfeitable at t0");
 
         // Phase 11: Final breakdown check
@@ -459,7 +459,7 @@ contract VeHemiStressTest is LockedCurveTestBase {
             _createPos(user, amount, duration, ptype);
         }
 
-        veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        veHemi.seedAndFinalizeNonTransferablePositions(_sortedNonTransferableTokenIds());
         _verify("Initial");
 
         // Check at every 30-day interval for 2 years
@@ -500,7 +500,7 @@ contract VeHemiStressTest is LockedCurveTestBase {
             _createPos(user, amount, lockDuration, ptype);
         }
 
-        veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        veHemi.seedAndFinalizeNonTransferablePositions(_sortedNonTransferableTokenIds());
         _verify("After same-expiry creation");
 
         // All positions should share the same end time
@@ -550,8 +550,8 @@ contract VeHemiStressTest is LockedCurveTestBase {
             _createPos(user, amount, duration, ptype);
         }
 
-        if (lockedTokenIds.length > 0) {
-            veHemi.seedAndFinalizeLockedPositions(_sortedLockedTokenIds());
+        if (nonTransferableTokenIds.length > 0) {
+            veHemi.seedAndFinalizeNonTransferablePositions(_sortedNonTransferableTokenIds());
         }
 
         _verify("After fuzzed creation");

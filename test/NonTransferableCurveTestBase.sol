@@ -8,10 +8,10 @@ import "../src/interfaces/IVeHemi.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "./mocks/MockERC20.sol";
 
-/// @title LockedCurveTestBase
-/// @notice Base test for VeHemi V2 locked curve (non-transferable position tracking).
+/// @title NonTransferableCurveTestBase
+/// @notice Base test for VeHemi V2 non-transferable curve (non-transferable position tracking).
 ///         Deploys VeHemi + VeHemiVoteDelegation WITHOUT restaking infrastructure.
-contract LockedCurveTestBase is Test {
+contract NonTransferableCurveTestBase is Test {
     MockERC20 hemi;
     VeHemi veHemi;
     VeHemiVoteDelegation delegation;

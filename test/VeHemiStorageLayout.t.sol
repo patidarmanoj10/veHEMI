@@ -36,9 +36,9 @@ import "./mocks/MockHemiVoteDelegation.sol";
 ///         ── VeHemiStorageV2 (slots 14–63) ──
 ///          14: __reservedSlot0
 ///          15: __reservedSlot1
-///          16: lockedSlopeChanges (mapping base)
-///          17: lockedGlobalPointHistory (mapping base)
-///          18: lockedSeedingFinalized
+///          16: nonTransferableSlopeChanges (mapping base)
+///          17: nonTransferableGlobalPointHistory (mapping base)
+///          18: nonTransferableSeedingFinalized
 ///          19: forfeitableSlopeChanges (mapping base)
 ///          20: forfeitableGlobalPointHistory (mapping base)
 ///          21–63: __gapV2[43]
@@ -315,7 +315,7 @@ contract VeHemiStorageLayoutTest is Test {
         // absolute slot 14 without aliasing any V1 or V2 field. The slot
         // should be zero on a fresh proxy, and writing to it must not
         // affect adjacent slots (13 = forfeitable mapping base, 15 =
-        // __reservedSlot1, 16 = lockedSlopeChanges mapping base).
+        // __reservedSlot1, 16 = nonTransferableSlopeChanges mapping base).
         bytes32 slot14 = bytes32(uint256(14));
         assertEq(vm.load(proxy, slot14), bytes32(0), "slot 14 should be zero on fresh proxy");
 
@@ -335,7 +335,7 @@ contract VeHemiStorageLayoutTest is Test {
 
         // And no observable getter changed.
         assertEq(veHemi.totalLocked(), 0, "V1 totalLocked corrupted by slot 14 write");
-        assertFalse(veHemi.lockedSeedingFinalized(), "V2 lockedSeedingFinalized corrupted by slot 14 write");
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "V2 nonTransferableSeedingFinalized corrupted by slot 14 write");
     }
 
     function test_slot15_reservedSlot1_isolated() public {
@@ -356,12 +356,12 @@ contract VeHemiStorageLayoutTest is Test {
         assertEq(vm.load(proxy, bytes32(uint256(17))), pre17, "slot 17 aliased by slot 15 write");
 
         assertEq(veHemi.totalLocked(), 0, "V1 totalLocked corrupted by slot 15 write");
-        assertFalse(veHemi.lockedSeedingFinalized(), "V2 lockedSeedingFinalized corrupted by slot 15 write");
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "V2 nonTransferableSeedingFinalized corrupted by slot 15 write");
     }
 
-    function test_slot17_lockedGlobalPointHistory() public {
-        // lockedGlobalPointHistory is mapping(uint256 => LockedPoint) at slot 17.
-        // LockedPoint is 2 slots:
+    function test_slot17_nonTransferableGlobalPointHistory() public {
+        // nonTransferableGlobalPointHistory is mapping(uint256 => SupplyPoint) at slot 17.
+        // SupplyPoint is 2 slots:
         //   slot+0: {int128 bias [0..15], int128 slope [16..31]}
         //   slot+1: {uint64 timestamp [0..7], uint64 blockNumber [8..15]}
         // No public getter — verify via vm.load round-trip + anti-alias checks
@@ -376,7 +376,7 @@ contract VeHemiStorageLayoutTest is Test {
         assertTrue(base17 != base20, "slot 17/20 keccak bases collide (impossible)");
         assertTrue(base17 != base6, "slot 17/6 keccak bases collide (impossible)");
 
-        // Write independent sentinels into BOTH slots of the LockedPoint struct.
+        // Write independent sentinels into BOTH slots of the SupplyPoint struct.
         bytes32 pointSlot0 = bytes32(
             (uint256(uint128(uint256(int256(int128(0x55))))) << 128) |
             uint256(uint128(uint256(int256(int128(0x44)))))
@@ -398,9 +398,9 @@ contract VeHemiStorageLayoutTest is Test {
     }
 
     function test_slot20_forfeitableGlobalPointHistory() public {
-        // forfeitableGlobalPointHistory is mapping(uint256 => LockedPoint) at slot 20.
+        // forfeitableGlobalPointHistory is mapping(uint256 => SupplyPoint) at slot 20.
         // Symmetric 3-way test: write at slot 20, verify slots 6 and 17 untouched,
-        // across both base+0 and base+1 of the LockedPoint struct.
+        // across both base+0 and base+1 of the SupplyPoint struct.
         uint256 epochKey = 5;
         bytes32 base6 = keccak256(abi.encode(epochKey, uint256(6)));
         bytes32 base17 = keccak256(abi.encode(epochKey, uint256(17)));
@@ -445,19 +445,19 @@ contract VeHemiStorageLayoutTest is Test {
     // V2 slots (14–20): verify the V2 fields start exactly where expected.
     // =========================================================================
 
-    function test_slot16_lockedSlopeChanges() public {
-        // lockedSlopeChanges is a mapping(uint256 => int128) at V2 slot 2 = absolute slot 16.
+    function test_slot16_nonTransferableSlopeChanges() public {
+        // nonTransferableSlopeChanges is a mapping(uint256 => int128) at V2 slot 2 = absolute slot 16.
         uint256 timestamp = 888;
         int128 sentinel = 4444;
         bytes32 slot = keccak256(abi.encode(timestamp, uint256(16)));
         vm.store(proxy, slot, bytes32(uint256(uint128(sentinel))));
-        assertEq(veHemi.lockedSlopeChanges(timestamp), sentinel, "lockedSlopeChanges base is not at slot 16");
+        assertEq(veHemi.nonTransferableSlopeChanges(timestamp), sentinel, "nonTransferableSlopeChanges base is not at slot 16");
     }
 
-    function test_slot18_lockedSeedingFinalized() public {
-        // lockedSeedingFinalized is a bool at V2 slot 4 = absolute slot 18.
+    function test_slot18_nonTransferableSeedingFinalized() public {
+        // nonTransferableSeedingFinalized is a bool at V2 slot 4 = absolute slot 18.
         vm.store(proxy, bytes32(uint256(18)), bytes32(uint256(1)));
-        assertTrue(veHemi.lockedSeedingFinalized(), "lockedSeedingFinalized is not at slot 18");
+        assertTrue(veHemi.nonTransferableSeedingFinalized(), "nonTransferableSeedingFinalized is not at slot 18");
     }
 
     function test_slot19_forfeitableSlopeChanges() public {

@@ -68,7 +68,7 @@ interface IVeHemi is IERC721Enumerable {
     event ForfeitAdminUpdated(address indexed oldForfeitAdmin, address indexed newForfeitAdmin);
 
     // --- V2 Events ---
-    event LockedSeedingFinalized(uint256 epoch);
+    event NonTransferableSeedingFinalized(uint256 epoch);
     event RewardUpdateFailed(uint256 indexed tokenId);
     event DelegationUpdateFailed(uint256 indexed delegator);
 
@@ -121,13 +121,13 @@ interface IVeHemi is IERC721Enumerable {
     function totalVeHemiSupply() external view returns (uint256);
     function totalVeHemiSupplyAt(uint256 timestamp_) external view returns (uint256);
 
-    // --- V2 Locked + Forfeitable Curve Functions ---
-    function seedAndFinalizeLockedPositions(uint256[] calldata tokenIds) external;
+    // --- V2 Non-transferable + Forfeitable Curve Functions ---
+    function seedAndFinalizeNonTransferablePositions(uint256[] calldata tokenIds) external;
     function nonTransferableTotalVeHemiSupply() external view returns (uint256);
     function nonTransferableTotalVeHemiSupplyAt(uint256 timestamp) external view returns (uint256);
     function forfeitableTotalVeHemiSupply() external view returns (uint256);
     function forfeitableTotalVeHemiSupplyAt(uint256 timestamp) external view returns (uint256);
     function supplyBreakdown() external view returns (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable);
-    // lockedSeedingFinalized(), lockedSlopeChanges(uint256), and forfeitableSlopeChanges(uint256)
+    // nonTransferableSeedingFinalized(), nonTransferableSlopeChanges(uint256), and forfeitableSlopeChanges(uint256)
     // are exposed as public state variables via VeHemiStorageV2 (auto-generated getters).
 }

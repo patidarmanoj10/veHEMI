@@ -30,7 +30,7 @@ contract InvariantHandler is Test {
     address admin;
 
     // V2: Track non-transferrable token IDs for seeding
-    uint256[] internal _lockedTokenIds;
+    uint256[] internal _nonTransferableTokenIds;
     bool public seeded;
 
     constructor(address admin_, address[5] memory _users) {
@@ -84,9 +84,9 @@ contract InvariantHandler is Test {
         maxWarp = MAX_ACCUMULATED_WARP;
     }
 
-    /// @dev Creates a non-transferrable, non-forfeitable lock (locked curve only).
+    /// @dev Creates a non-transferrable, non-forfeitable lock (non-transferable curve only).
     ///      Tracks the token ID for seeding.
-    function createLockedPosition(uint256 amount, uint256 duration) public returns (uint256 tokenId) {
+    function createNonTransferablePosition(uint256 amount, uint256 duration) public returns (uint256 tokenId) {
         amount = bound(amount, MIN_AMOUNT, MAX_AMOUNT);
         duration = bound(duration, MIN_DURATION, MAX_DURATION / 2);
 
@@ -96,12 +96,12 @@ contract InvariantHandler is Test {
         tokenId = veHemi.createLockFor(amount, duration, msg.sender, false, false);
         vm.stopPrank();
 
-        if (!seeded) _lockedTokenIds.push(tokenId);
+        if (!seeded) _nonTransferableTokenIds.push(tokenId);
 
         maxWarp = MAX_ACCUMULATED_WARP;
     }
 
-    /// @dev Creates a non-transferrable, forfeitable lock (locked + forfeitable curves).
+    /// @dev Creates a non-transferrable, forfeitable lock (non-transferable + forfeitable curves).
     ///      Tracks the token ID for seeding.
     function createForfeitablePosition(uint256 amount, uint256 duration) public returns (uint256 tokenId) {
         amount = bound(amount, MIN_AMOUNT, MAX_AMOUNT);
@@ -113,25 +113,25 @@ contract InvariantHandler is Test {
         tokenId = veHemi.createLockFor(amount, duration, msg.sender, false, true);
         vm.stopPrank();
 
-        if (!seeded) _lockedTokenIds.push(tokenId);
+        if (!seeded) _nonTransferableTokenIds.push(tokenId);
 
         maxWarp = MAX_ACCUMULATED_WARP;
     }
 
     // ── Seeding action ───────────────────────────────────────────────────
 
-    /// @dev Seeds the locked + forfeitable curves. Can only succeed once.
+    /// @dev Seeds the non-transferable + forfeitable curves. Can only succeed once.
     ///      Skipped if no locked/forfeitable positions exist yet.
     ///      Filters out tokens that were burned (forfeited/withdrawn) before seeding.
     function seed() public {
         if (seeded) return;
-        if (_lockedTokenIds.length == 0) return;
+        if (_nonTransferableTokenIds.length == 0) return;
 
         // Filter to only existing, non-transferrable tokens
         uint256 count;
-        uint256[] memory filtered = new uint256[](_lockedTokenIds.length);
-        for (uint256 i; i < _lockedTokenIds.length; i++) {
-            uint256 id = _lockedTokenIds[i];
+        uint256[] memory filtered = new uint256[](_nonTransferableTokenIds.length);
+        for (uint256 i; i < _nonTransferableTokenIds.length; i++) {
+            uint256 id = _nonTransferableTokenIds[i];
             address owner = _ownerOf(id);
             if (owner == address(0)) continue; // burned
             if (veHemi.getLockedBalance(id).amount <= 0) continue; // empty
@@ -158,7 +158,7 @@ contract InvariantHandler is Test {
         }
 
         vm.prank(admin);
-        veHemi.seedAndFinalizeLockedPositions(toSeed);
+        veHemi.seedAndFinalizeNonTransferablePositions(toSeed);
 
         seeded = true;
         maxWarp = MAX_ACCUMULATED_WARP;
@@ -297,7 +297,7 @@ contract InvariantHandler is Test {
     }
 
     /// @dev Permissionless bare-checkpoint path. Exercises `_checkpoint(0, ...)`
-    ///      which writes to globalPointHistory / lockedGlobalPointHistory /
+    ///      which writes to globalPointHistory / nonTransferableGlobalPointHistory /
     ///      forfeitableGlobalPointHistory without an accompanying user mutation.
     function checkpoint() public {
         veHemi.checkpoint();

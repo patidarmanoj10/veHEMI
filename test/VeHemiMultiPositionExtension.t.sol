@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import "./LockedCurveTestBase.sol";
+import "./NonTransferableCurveTestBase.sol";
 import "../src/storage/VeHemiStorageV2.sol";
 
 /// @title VeHemiMultiPositionExtensionTest
-/// @notice Comprehensive test covering extension of multiple locked-only AND locked+forfeitable
+/// @notice Comprehensive test covering extension of multiple non-transferable-only AND locked+forfeitable
 ///         positions by various amounts, with full weight verification at 8 timestamps.
 ///
 ///         Setup:
-///           - 3 locked-only positions: 1yr, 2yr, 3yr
+///           - 3 non-transferable-only positions: 1yr, 2yr, 3yr
 ///           - 3 forfeitable positions: 1yr, 2yr, 3yr
 ///           - All 6 seeded
 ///           - Each extended by different amounts (+6mo, +1yr, +2yr)
@@ -19,7 +19,7 @@ import "../src/storage/VeHemiStorageV2.sol";
 ///           - Global weight uses lock.end
 ///
 ///         Verifies exact equality at t0, t0+6mo, t0+1yr, t0+1.5yr, t0+2yr, t0+2.5yr, t0+3yr, t0+4yr.
-contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
+contract VeHemiMultiPositionExtensionTest is NonTransferableCurveTestBase {
     uint256 constant LOCK_1Y = 1 * 365 days;
     uint256 constant LOCK_2Y = 2 * 365 days;
     uint256 constant LOCK_3Y = 3 * 365 days;
@@ -35,7 +35,7 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
 
     PosInfo[] internal positions;
 
-    // Extra users beyond alice/bob/charlie (which are defined in LockedCurveTestBase)
+    // Extra users beyond alice/bob/charlie (which are defined in NonTransferableCurveTestBase)
     address dave = address(0x7788);
     address eve = address(0x99AA);
     address frank = address(0xBBCC);
@@ -62,7 +62,7 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
 
     // ── Position creation and recording helpers ──────────────────────────
 
-    function _createAndRecordLocked(address account_, uint256 amount_, uint256 duration_) internal {
+    function _createAndRecordNonTransferable(address account_, uint256 amount_, uint256 duration_) internal {
         vm.startPrank(admin);
         hemi.mint(admin, amount_);
         hemi.approve(address(veHemi), type(uint256).max);
@@ -86,7 +86,7 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
         positions.push(PosInfo(tokenId, slope, end, end, true));
     }
 
-    /// @dev Sort token IDs ascending for seedAndFinalizeLockedPositions
+    /// @dev Sort token IDs ascending for seedAndFinalizeNonTransferablePositions
     function _sortedIds() internal view returns (uint256[] memory sorted) {
         sorted = new uint256[](positions.length);
         for (uint256 i; i < positions.length; i++) {
@@ -117,7 +117,7 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
 
     /// @dev Expected locked (non-transferable) supply at time t.
     ///      Effective end = min(lockEnd, transferableAfter). Active only when transferableAfter > t.
-    function _expectedLockedSupply(uint256 t) internal view returns (uint256 total) {
+    function _expectedNonTransferableSupply(uint256 t) internal view returns (uint256 total) {
         for (uint256 i; i < positions.length; i++) {
             PosInfo memory p = positions[i];
             if (p.transferableAfter <= t) continue;
@@ -148,28 +148,28 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
         veHemi.checkpoint();
 
         uint256 expectedGlobal = _expectedGlobalSupply(t);
-        uint256 expectedLocked = _expectedLockedSupply(t);
+        uint256 expectedNonTransferable = _expectedNonTransferableSupply(t);
         uint256 expectedForfeitable = _expectedForfeitableSupply(t);
 
         uint256 actualGlobal = veHemi.totalVeHemiSupply();
-        uint256 actualLocked = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 actualNonTransferable = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 actualForfeitable = veHemi.forfeitableTotalVeHemiSupply();
 
         // Exact equality against shadow
         assertEq(actualGlobal, expectedGlobal, string.concat(label, ": global supply"));
-        assertEq(actualLocked, expectedLocked, string.concat(label, ": locked supply"));
+        assertEq(actualNonTransferable, expectedNonTransferable, string.concat(label, ": non-transferable supply"));
         assertEq(actualForfeitable, expectedForfeitable, string.concat(label, ": forfeitable supply"));
 
         // supplyBreakdown consistency
-        (uint256 bdTotal, uint256 bdLocked, uint256 bdForf, uint256 bdTrans) = veHemi.supplyBreakdown();
+        (uint256 bdTotal, uint256 bdNonTransferable, uint256 bdForf, uint256 bdTrans) = veHemi.supplyBreakdown();
         assertEq(bdTotal, actualGlobal, string.concat(label, ": breakdown total"));
-        assertEq(bdLocked, actualLocked, string.concat(label, ": breakdown locked"));
+        assertEq(bdNonTransferable, actualNonTransferable, string.concat(label, ": breakdown locked"));
         assertEq(bdForf, actualForfeitable, string.concat(label, ": breakdown forfeitable"));
-        assertEq(bdTrans, actualGlobal - actualLocked, string.concat(label, ": breakdown transferable"));
+        assertEq(bdTrans, actualGlobal - actualNonTransferable, string.concat(label, ": breakdown transferable"));
 
         // Ordering invariant: forfeitable <= locked <= total
-        assertLe(actualForfeitable, actualLocked, string.concat(label, ": forfeitable <= locked"));
-        assertLe(actualLocked, actualGlobal, string.concat(label, ": locked <= total"));
+        assertLe(actualForfeitable, actualNonTransferable, string.concat(label, ": forfeitable <= locked"));
+        assertLe(actualNonTransferable, actualGlobal, string.concat(label, ": locked <= total"));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -179,10 +179,10 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
     function test_MultiPositionExtension_ComprehensiveWeightVerification() public {
         uint256 amount = 100 ether;
 
-        // Step 1: Create 3 locked-only positions (1yr, 2yr, 3yr)
-        _createAndRecordLocked(alice, amount, LOCK_1Y);
-        _createAndRecordLocked(bob, amount, LOCK_2Y);
-        _createAndRecordLocked(charlie, amount, LOCK_3Y);
+        // Step 1: Create 3 non-transferable-only positions (1yr, 2yr, 3yr)
+        _createAndRecordNonTransferable(alice, amount, LOCK_1Y);
+        _createAndRecordNonTransferable(bob, amount, LOCK_2Y);
+        _createAndRecordNonTransferable(charlie, amount, LOCK_3Y);
 
         // Step 2: Create 3 forfeitable positions (1yr, 2yr, 3yr)
         _createAndRecordForfeitable(dave, amount, LOCK_1Y);
@@ -190,7 +190,7 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
         _createAndRecordForfeitable(frank, amount, LOCK_3Y);
 
         // Step 3: Seed all 6 positions
-        veHemi.seedAndFinalizeLockedPositions(_sortedIds());
+        veHemi.seedAndFinalizeNonTransferablePositions(_sortedIds());
 
         uint256 t0 = block.timestamp;
 
@@ -284,9 +284,9 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
         uint256 ta1yr = positions[0].transferableAfter;
 
         // Use historical query at ta1yr + 1 (already checkpointed through this)
-        uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupplyAt(ta1yr + 1);
-        uint256 expectedLocked = _expectedLockedSupply(ta1yr + 1);
-        assertEq(lockedSupply, expectedLocked, "After 1yr TA: locked excludes exited positions");
+        uint256 nonTransferableSupply = veHemi.nonTransferableTotalVeHemiSupplyAt(ta1yr + 1);
+        uint256 expectedNonTransferable = _expectedNonTransferableSupply(ta1yr + 1);
+        assertEq(nonTransferableSupply, expectedNonTransferable, "After 1yr TA: locked excludes exited positions");
 
         // Verify positions 0 and 3 (1yr TAs) have global VP at ta1yr+1 (their locks extend past)
         if (positions[0].lockEnd > ta1yr + 1) {
@@ -328,14 +328,14 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
         uint256 amount = 100 ether;
 
         // Create all 6 positions
-        _createAndRecordLocked(alice, amount, LOCK_1Y);
-        _createAndRecordLocked(bob, amount, LOCK_2Y);
-        _createAndRecordLocked(charlie, amount, LOCK_3Y);
+        _createAndRecordNonTransferable(alice, amount, LOCK_1Y);
+        _createAndRecordNonTransferable(bob, amount, LOCK_2Y);
+        _createAndRecordNonTransferable(charlie, amount, LOCK_3Y);
         _createAndRecordForfeitable(dave, amount, LOCK_1Y);
         _createAndRecordForfeitable(eve, amount, LOCK_2Y);
         _createAndRecordForfeitable(frank, amount, LOCK_3Y);
 
-        veHemi.seedAndFinalizeLockedPositions(_sortedIds());
+        veHemi.seedAndFinalizeNonTransferablePositions(_sortedIds());
 
         uint256 t0 = block.timestamp;
 
@@ -344,7 +344,7 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
 
         // Snapshot expected values at t0 (post-extension, same block)
         uint256 expGlobalT0 = _expectedGlobalSupply(t0);
-        uint256 expLockedT0 = _expectedLockedSupply(t0);
+        uint256 expNonTransferableT0 = _expectedNonTransferableSupply(t0);
         uint256 expForfT0 = _expectedForfeitableSupply(t0);
 
         // Warp forward 6 months and checkpoint
@@ -353,7 +353,7 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
 
         uint256 t1 = block.timestamp;
         uint256 t1Global = veHemi.totalVeHemiSupply();
-        uint256 t1Locked = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 t1NonTransferable = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 t1Forfeitable = veHemi.forfeitableTotalVeHemiSupply();
 
         // Warp forward another 6 months and checkpoint (to enable historical queries)
@@ -362,12 +362,12 @@ contract VeHemiMultiPositionExtensionTest is LockedCurveTestBase {
 
         // Historical query at t0
         assertEq(veHemi.totalVeHemiSupplyAt(t0), expGlobalT0, "Hist global at t0");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupplyAt(t0), expLockedT0, "Hist locked at t0");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupplyAt(t0), expNonTransferableT0, "Hist non-transferable at t0");
         assertEq(veHemi.forfeitableTotalVeHemiSupplyAt(t0), expForfT0, "Hist forfeitable at t0");
 
         // Historical query at t1
         assertEq(veHemi.totalVeHemiSupplyAt(t1), t1Global, "Hist global at t1");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupplyAt(t1), t1Locked, "Hist locked at t1");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupplyAt(t1), t1NonTransferable, "Hist non-transferable at t1");
         assertEq(veHemi.forfeitableTotalVeHemiSupplyAt(t1), t1Forfeitable, "Hist forfeitable at t1");
     }
 

@@ -68,9 +68,9 @@ contract StorageLayoutGoldenTest is Test {
     function test_VeHemi_V2SlotsAtExpectedPositions() public view {
         _assertVeHemiEntry(14, "14", "__reservedSlot0");
         _assertVeHemiEntry(15, "15", "__reservedSlot1");
-        _assertVeHemiEntry(16, "16", "lockedSlopeChanges");
-        _assertVeHemiEntry(17, "17", "lockedGlobalPointHistory");
-        _assertVeHemiEntry(18, "18", "lockedSeedingFinalized");
+        _assertVeHemiEntry(16, "16", "nonTransferableSlopeChanges");
+        _assertVeHemiEntry(17, "17", "nonTransferableGlobalPointHistory");
+        _assertVeHemiEntry(18, "18", "nonTransferableSeedingFinalized");
         _assertVeHemiEntry(19, "19", "forfeitableSlopeChanges");
         _assertVeHemiEntry(20, "20", "forfeitableGlobalPointHistory");
         // Slot 21: the __gapV2 array.
@@ -219,19 +219,19 @@ contract StorageLayoutGoldenTest is Test {
             "LockedBalance must be 1 slot (32 bytes)"
         );
         assertEq(
-            vm.parseJsonString(veHemiJson, ".types.[\"t_struct(LockedPoint)_storage\"].numberOfBytes"),
+            vm.parseJsonString(veHemiJson, ".types.[\"t_struct(SupplyPoint)_storage\"].numberOfBytes"),
             "64",
-            "LockedPoint must be 2 slots (64 bytes)"
+            "SupplyPoint must be 2 slots (64 bytes)"
         );
     }
 
-    /// @dev Pin the member layout of LockedPoint — slots 17 and 20 hold
-    ///      LockedPoint structs but have no public getter, so a bias↔slope or
+    /// @dev Pin the member layout of SupplyPoint — slots 17 and 20 hold
+    ///      SupplyPoint structs but have no public getter, so a bias↔slope or
     ///      timestamp↔blockNumber swap inside this struct would NOT be caught
     ///      by the sentinel tests in VeHemiStorageLayout.t.sol. This test is
     ///      the only forge-test-time defense against that regression.
-    function test_VeHemi_LockedPointMemberLayout() public view {
-        string memory base = ".types.[\"t_struct(LockedPoint)_storage\"].members";
+    function test_VeHemi_SupplyPointMemberLayout() public view {
+        string memory base = ".types.[\"t_struct(SupplyPoint)_storage\"].members";
         // Member 0: int128 bias at slot 0 offset 0.
         assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[0].label")), "bias");
         assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[0].slot")), "0");
@@ -467,10 +467,10 @@ contract StorageLayoutGoldenTest is Test {
         _assertVeHemiType(13, "t_mapping(t_uint256,t_bool)");
         // V2 mappings (slots 14-15 are __reservedSlotN of type t_uint256, already pinned above).
         _assertVeHemiType(16, "t_mapping(t_uint256,t_int128)");
-        _assertVeHemiType(17, "t_mapping(t_uint256,t_struct(LockedPoint)_storage)");
-        _assertVeHemiType(18, "t_bool"); // lockedSeedingFinalized — not a mapping, but pin the type.
+        _assertVeHemiType(17, "t_mapping(t_uint256,t_struct(SupplyPoint)_storage)");
+        _assertVeHemiType(18, "t_bool"); // nonTransferableSeedingFinalized — not a mapping, but pin the type.
         _assertVeHemiType(19, "t_mapping(t_uint256,t_int128)");
-        _assertVeHemiType(20, "t_mapping(t_uint256,t_struct(LockedPoint)_storage)");
+        _assertVeHemiType(20, "t_mapping(t_uint256,t_struct(SupplyPoint)_storage)");
     }
 
     /// @dev Pin the exact type string for every delegation mapping + trustedAdapter.
@@ -498,7 +498,7 @@ contract StorageLayoutGoldenTest is Test {
         _assertTypeEncoding(veHemiJson, "t_mapping(t_uint256,t_bool)", "mapping");
         _assertTypeEncoding(veHemiJson, "t_array(t_uint256)43_storage", "inplace");
         _assertTypeEncoding(veHemiJson, "t_struct(Point)_storage", "inplace");
-        _assertTypeEncoding(veHemiJson, "t_struct(LockedPoint)_storage", "inplace");
+        _assertTypeEncoding(veHemiJson, "t_struct(SupplyPoint)_storage", "inplace");
 
         _assertTypeEncoding(delegationJson, "t_address", "inplace");
         _assertTypeEncoding(delegationJson, "t_mapping(t_address,t_address)", "mapping");

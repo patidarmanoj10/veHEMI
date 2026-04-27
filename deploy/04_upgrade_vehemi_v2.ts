@@ -18,10 +18,10 @@ const VOTE_DELEGATION = "VeHemiVoteDelegation";
 //
 //   2. upgrade(VeHemi proxy, new VeHemi V2 impl) - upgrades VeHemi to the V2
 //      implementation. NO initializer call. The V2 locked-curve functionality
-//      is gated behind `lockedSeedingFinalized` (defaults to false), so the
+//      is gated behind `nonTransferableSeedingFinalized` (defaults to false), so the
 //      contract behaves identically to V1 until step 3 runs.
 //
-//   3. seedAndFinalizeLockedPositions(tokenIds) - seeds all active
+//   3. seedAndFinalizeNonTransferablePositions(tokenIds) - seeds all active
 //      non-transferable positions and enables locked-curve tracking. One-shot
 //      and irreversible: the function reverts on subsequent calls.
 //
@@ -34,7 +34,7 @@ const VOTE_DELEGATION = "VeHemiVoteDelegation";
 // reverse order is also safe but redundant work would be needed to recover.
 //
 // IMPORTANT: The tokenIds array MUST include ALL active non-transferable
-// positions. Omitted positions would permanently understate the locked supply
+// positions. Omitted positions would permanently understate the non-transferable supply
 // with no recovery path other than a full V3 upgrade. Verify the calldata
 // against on-chain state before governance execution.
 
@@ -43,7 +43,7 @@ const VOTE_DELEGATION = "VeHemiVoteDelegation";
 // Sorted ascending. Range 28660-28805 (6 of the original 132 have expired).
 // IMPORTANT: Re-verify against on-chain state before governance execution.
 // prettier-ignore
-const LOCKED_TOKEN_IDS: number[] = [
+const NON_TRANSFERABLE_TOKEN_IDS: number[] = [
     28660, 28661, 28662, 28663, 28664, 28665, 28666, 28667, 28668, 28669,
     28670, 28671, 28672, 28673, 28674, 28675, 28676, 28677, 28678, 28679,
     28680, 28681, 28682, 28683, 28684, 28685, 28686, 28687, 28688, 28689,
@@ -186,7 +186,7 @@ const func: DeployFunction = async function (hre) {
 
     // ── Step 2: Upgrade VeHemi to V2 ───────────────────────────────────────
     // Same pattern: bare upgrade with no initializer call. The V2
-    // locked-curve logic is dormant until step 3 (seedAndFinalizeLockedPositions).
+    // locked-curve logic is dormant until step 3 (seedAndFinalizeNonTransferablePositions).
     const upgradeVeHemiFunction = () =>
         deploy(VE_HEMI, {
             from: deployer,
@@ -207,7 +207,7 @@ const func: DeployFunction = async function (hre) {
     // ── Step 3: Seed and finalize all non-transferable positions ───────────
     // Activates locked-curve tracking. One-shot and irreversible.
     const seedFunction = () =>
-        execute(VE_HEMI, { from: deployer, log: true }, "seedAndFinalizeLockedPositions", LOCKED_TOKEN_IDS);
+        execute(VE_HEMI, { from: deployer, log: true }, "seedAndFinalizeNonTransferablePositions", NON_TRANSFERABLE_TOKEN_IDS);
 
     const multiSigSeedTx = await catchUnknownSigner(seedFunction, { log: true });
 

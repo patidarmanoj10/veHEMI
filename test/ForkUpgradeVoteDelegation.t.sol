@@ -20,7 +20,7 @@ interface IProxyAdminV4 {
  * @notice Fork test for the VeHemiVoteDelegation proxy upgrade on Hemi mainnet.
  *         Specifically validates that the V1/V2 chain-inheritance refactor
  *         preserves bit-identical storage across the upgrade and that real
- *         delegation state survives. Complements ForkUpgradeLockedCurve.t.sol
+ *         delegation state survives. Complements ForkUpgradeNonTransferableCurve.t.sol
  *         which covers the VeHemi proxy.
  *
  * @dev The production Safe batch (deploy/04_upgrade_vehemi_v2.ts) upgrades the

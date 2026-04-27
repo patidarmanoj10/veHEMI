@@ -23,7 +23,7 @@ import "./mocks/MockHemiVoteDelegation.sol";
 ///         inheritance per Manoj's review comment).
 ///
 ///         This is complementary to VeHemiStorageLayout.t.sol (which tests
-///         slot positions against fresh-deploy state) and ForkUpgradeLockedCurve.t.sol
+///         slot positions against fresh-deploy state) and ForkUpgradeNonTransferableCurve.t.sol
 ///         (which tests against live mainnet state). This test is CI-safe,
 ///         hermetic, and runs in milliseconds.
 contract VeHemiV1ToV2UpgradeTest is Test {
@@ -237,12 +237,12 @@ contract VeHemiV1ToV2UpgradeTest is Test {
         vm.store(proxy, sc, bytes32(uint256(uint128(uint256(int256(int128(9999)))))));
 
         // Slot 10 (locked): LockedBalance { int128 amount, uint64 end } packed.
-        bytes32 lockedSlot = keccak256(abi.encode(TEST_TOKEN_ID, uint256(10)));
+        bytes32 nonTransferableSlot = keccak256(abi.encode(TEST_TOKEN_ID, uint256(10)));
         bytes32 packed = bytes32(
             (uint256(uint64(0xEE)) << 128) |
             uint256(uint128(uint256(int256(int128(0xAA)))))
         );
-        vm.store(proxy, lockedSlot, packed);
+        vm.store(proxy, nonTransferableSlot, packed);
 
         // Slot 11 (provider): address mapping.
         bytes32 provSlot = keccak256(abi.encode(TEST_TOKEN_ID, uint256(11)));
@@ -303,11 +303,11 @@ contract VeHemiV1ToV2UpgradeTest is Test {
         vm.store(proxy, bytes32(uint256(14)), bytes32(uint256(0x1414)));
         vm.store(proxy, bytes32(uint256(15)), bytes32(uint256(0x1515)));
 
-        // Slot 16 (lockedSlopeChanges): int128 mapping.
+        // Slot 16 (nonTransferableSlopeChanges): int128 mapping.
         bytes32 lsc = keccak256(abi.encode(TEST_TIMESTAMP, uint256(16)));
         vm.store(proxy, lsc, bytes32(uint256(uint128(uint256(int256(int128(1616)))))));
 
-        // Slot 17 (lockedGlobalPointHistory): LockedPoint occupies 2 slots.
+        // Slot 17 (nonTransferableGlobalPointHistory): SupplyPoint occupies 2 slots.
         //   slot+0: {int128 bias [0..15], int128 slope [16..31]}
         //   slot+1: {uint64 ts [0..7], uint64 bn [8..15]}
         // Exercise BOTH slots with distinct sentinels.
@@ -326,14 +326,14 @@ contract VeHemiV1ToV2UpgradeTest is Test {
             bytes32((uint256(uint64(0x1704)) << 64) | uint256(uint64(0x1703)))
         );
 
-        // Slot 18 (lockedSeedingFinalized): bool.
+        // Slot 18 (nonTransferableSeedingFinalized): bool.
         vm.store(proxy, bytes32(uint256(18)), bytes32(uint256(1)));
 
         // Slot 19 (forfeitableSlopeChanges): int128 mapping.
         bytes32 fsc = keccak256(abi.encode(TEST_TIMESTAMP, uint256(19)));
         vm.store(proxy, fsc, bytes32(uint256(uint128(uint256(int256(int128(1919)))))));
 
-        // Slot 20 (forfeitableGlobalPointHistory): LockedPoint, 2 slots.
+        // Slot 20 (forfeitableGlobalPointHistory): SupplyPoint, 2 slots.
         bytes32 fgph = keccak256(abi.encode(uint256(7), uint256(20)));
         vm.store(
             proxy,
@@ -354,9 +354,9 @@ contract VeHemiV1ToV2UpgradeTest is Test {
         assertEq(vm.load(proxy, bytes32(uint256(14))), bytes32(uint256(0x1414)), "slot 14 changed");
         assertEq(vm.load(proxy, bytes32(uint256(15))), bytes32(uint256(0x1515)), "slot 15 changed");
         assertEq(
-            veHemi.lockedSlopeChanges(TEST_TIMESTAMP),
+            veHemi.nonTransferableSlopeChanges(TEST_TIMESTAMP),
             int128(1616),
-            "lockedSlopeChanges (slot 16) changed"
+            "nonTransferableSlopeChanges (slot 16) changed"
         );
         bytes32 lgph17 = keccak256(abi.encode(uint256(7), uint256(17)));
         assertEq(
@@ -365,14 +365,14 @@ contract VeHemiV1ToV2UpgradeTest is Test {
                 (uint256(uint128(uint256(int256(int128(0x1702))))) << 128) |
                 uint256(uint128(uint256(int256(int128(0x1701)))))
             ),
-            "lockedGlobalPointHistory slot+0 (slot 17 base)"
+            "nonTransferableGlobalPointHistory slot+0 (slot 17 base)"
         );
         assertEq(
             vm.load(proxy, bytes32(uint256(lgph17) + 1)),
             bytes32((uint256(uint64(0x1704)) << 64) | uint256(uint64(0x1703))),
-            "lockedGlobalPointHistory slot+1 (slot 17 base+1)"
+            "nonTransferableGlobalPointHistory slot+1 (slot 17 base+1)"
         );
-        assertTrue(veHemi.lockedSeedingFinalized(), "lockedSeedingFinalized (slot 18) changed");
+        assertTrue(veHemi.nonTransferableSeedingFinalized(), "nonTransferableSeedingFinalized (slot 18) changed");
         assertEq(
             veHemi.forfeitableSlopeChanges(TEST_TIMESTAMP),
             int128(1919),

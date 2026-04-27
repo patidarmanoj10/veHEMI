@@ -5,7 +5,7 @@ libs = ["lib"]
 solc_version = "0.8.29"
 optimizer = true
 optimizer_runs = 200  # MUST match Hardhat/production setting (R16-6-5, R18-7-NA3, R25-5-C1)
-via_ir = false
+via_ir = true
 evm_version = "cancun"  # Required for EIP-1153 transient storage (ReentrancyGuardTransient)
 block_timestamp = 1_738_368_000 # Feb 1, 2025 at 00:00 GMT
 

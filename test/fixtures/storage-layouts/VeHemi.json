@@ -114,21 +114,21 @@
     },
     {
       "contract": "src/VeHemi.sol:VeHemi",
-      "label": "lockedSlopeChanges",
+      "label": "nonTransferableSlopeChanges",
       "offset": 0,
       "slot": "16",
       "type": "t_mapping(t_uint256,t_int128)"
     },
     {
       "contract": "src/VeHemi.sol:VeHemi",
-      "label": "lockedGlobalPointHistory",
+      "label": "nonTransferableGlobalPointHistory",
       "offset": 0,
       "slot": "17",
-      "type": "t_mapping(t_uint256,t_struct(LockedPoint)_storage)"
+      "type": "t_mapping(t_uint256,t_struct(SupplyPoint)_storage)"
     },
     {
       "contract": "src/VeHemi.sol:VeHemi",
-      "label": "lockedSeedingFinalized",
+      "label": "nonTransferableSeedingFinalized",
       "offset": 0,
       "slot": "18",
       "type": "t_bool"
@@ -145,7 +145,7 @@
       "label": "forfeitableGlobalPointHistory",
       "offset": 0,
       "slot": "20",
-      "type": "t_mapping(t_uint256,t_struct(LockedPoint)_storage)"
+      "type": "t_mapping(t_uint256,t_struct(SupplyPoint)_storage)"
     },
     {
       "contract": "src/VeHemi.sol:VeHemi",
@@ -264,14 +264,14 @@
       "numberOfBytes": "32",
       "value": "t_struct(LockedBalance)_storage"
     },
-    "t_mapping(t_uint256,t_struct(LockedPoint)_storage)": {
+    "t_mapping(t_uint256,t_struct(SupplyPoint)_storage)": {
       "base": null,
       "encoding": "mapping",
       "key": "t_uint256",
-      "label": "mapping(uint256 => struct VeHemiStorageV2.LockedPoint)",
+      "label": "mapping(uint256 => struct VeHemiStorageV2.SupplyPoint)",
       "members": null,
       "numberOfBytes": "32",
-      "value": "t_struct(LockedPoint)_storage"
+      "value": "t_struct(SupplyPoint)_storage"
     },
     "t_mapping(t_uint256,t_struct(Point)_storage)": {
       "base": null,
@@ -315,11 +315,11 @@
       "numberOfBytes": "32",
       "value": null
     },
-    "t_struct(LockedPoint)_storage": {
+    "t_struct(SupplyPoint)_storage": {
       "base": null,
       "encoding": "inplace",
       "key": null,
-      "label": "struct VeHemiStorageV2.LockedPoint",
+      "label": "struct VeHemiStorageV2.SupplyPoint",
       "members": [
         {
           "contract": "src/VeHemi.sol:VeHemi",

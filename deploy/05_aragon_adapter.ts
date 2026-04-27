@@ -28,7 +28,7 @@ const IFACE_ID_ERC6372 = "0xda287a1d";
 //   - VeHemiVoteDelegation proxy is deployed and upgraded to the
 //     Aragon-compatible implementation with autoDelegate, delegateAllFor,
 //     hourly checkpoints, and setTrustedAdapter (script 04)
-//   - seedAndFinalizeLockedPositions has been called (script 04)
+//   - seedAndFinalizeNonTransferablePositions has been called (script 04)
 
 const func: DeployFunction = async function (hre) {
     const { deployments, getNamedAccounts, network } = hre;

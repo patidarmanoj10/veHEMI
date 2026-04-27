@@ -14,13 +14,13 @@ import "./mocks/MockHemiVoteDelegation.sol";
 ///         TransparentUpgradeableProxy + ProxyAdmin + `ProxyAdmin.upgradeAndCall`.
 ///
 ///         Unlike the existing `test/VeHemi.t.sol` (which uses ERC1967Proxy)
-///         and `test/ForkUpgradeLockedCurve.t.sol` (fork-only), this test
+///         and `test/ForkUpgradeNonTransferableCurve.t.sol` (fork-only), this test
 ///         exercises the EXACT proxy pattern used on Hemi mainnet in a CI-safe,
 ///         hermetic setting. It catches:
 ///          - Storage-layout drift across the implementation swap
 ///          - Admin authorization failures
-///          - seedAndFinalizeLockedPositions invocation semantics
-///          - Pre-seeding "behaves like V1" guarantee (hooks gated on lockedSeedingFinalized)
+///          - seedAndFinalizeNonTransferablePositions invocation semantics
+///          - Pre-seeding "behaves like V1" guarantee (hooks gated on nonTransferableSeedingFinalized)
 contract VeHemiV2UpgradeLocalTest is Test {
     MockERC20 hemi;
     MockHemiVoteDelegation mockDelegation;
@@ -359,12 +359,12 @@ contract VeHemiV2UpgradeLocalTest is Test {
     }
 
     // =========================================================================
-    // lockedSeedingFinalized gate: pre-seeding, V2 must behave like V1.
+    // nonTransferableSeedingFinalized gate: pre-seeding, V2 must behave like V1.
     // =========================================================================
 
     function test_PreSeed_V2BehavesAsV1() public {
-        // No seeding yet — lockedSeedingFinalized is false.
-        assertFalse(veHemi.lockedSeedingFinalized());
+        // No seeding yet — nonTransferableSeedingFinalized is false.
+        assertFalse(veHemi.nonTransferableSeedingFinalized());
         assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0);
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0);
 
@@ -385,13 +385,13 @@ contract VeHemiV2UpgradeLocalTest is Test {
         ids[0] = tokenId;
 
         vm.prank(admin);
-        veHemi.seedAndFinalizeLockedPositions(ids);
-        assertTrue(veHemi.lockedSeedingFinalized());
+        veHemi.seedAndFinalizeNonTransferablePositions(ids);
+        assertTrue(veHemi.nonTransferableSeedingFinalized());
 
         // Second attempt must revert with the specific selector.
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSignature("SeedingAlreadyFinalized()"));
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        veHemi.seedAndFinalizeNonTransferablePositions(ids);
     }
 
     function test_SeedAndFinalize_OnlyOwner() public {
@@ -401,7 +401,7 @@ contract VeHemiV2UpgradeLocalTest is Test {
         vm.expectRevert(
             abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", attacker)
         );
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        veHemi.seedAndFinalizeNonTransferablePositions(ids);
     }
 
     /// @dev Front-run defense on the production upgrade path. Between the
@@ -427,7 +427,7 @@ contract VeHemiV2UpgradeLocalTest is Test {
         assertEq(veHemi.owner(), admin, "admin ownership lost");
     }
 
-    /// @dev Lock in semantics of `seedAndFinalizeLockedPositions([])` — whether
+    /// @dev Lock in semantics of `seedAndFinalizeNonTransferablePositions([])` — whether
     ///      it reverts or flips the latch must not accidentally change. Current
     ///      behavior: reverts with EmptyArray to prevent the admin from
     ///      finalizing without seeding any positions.
@@ -435,8 +435,8 @@ contract VeHemiV2UpgradeLocalTest is Test {
         uint256[] memory empty = new uint256[](0);
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSignature("EmptyArray()"));
-        veHemi.seedAndFinalizeLockedPositions(empty);
-        assertFalse(veHemi.lockedSeedingFinalized(), "latch must remain unset when array empty");
+        veHemi.seedAndFinalizeNonTransferablePositions(empty);
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "latch must remain unset when array empty");
     }
 
     // =========================================================================
@@ -459,16 +459,16 @@ contract VeHemiV2UpgradeLocalTest is Test {
         // 4. Assert V1 state preserved.
         assertEq(veHemi.totalVeHemiSupply(), preTotalSupply);
         assertEq(veHemi.ownerOf(tokenId), user);
-        assertFalse(veHemi.lockedSeedingFinalized());
+        assertFalse(veHemi.nonTransferableSeedingFinalized());
 
         // 5. Seed (step 3 of deploy script).
         uint256[] memory ids = new uint256[](1);
         ids[0] = tokenId;
         vm.prank(admin);
-        veHemi.seedAndFinalizeLockedPositions(ids);
+        veHemi.seedAndFinalizeNonTransferablePositions(ids);
 
         // 6. Verify subcurves now populated.
-        assertTrue(veHemi.lockedSeedingFinalized());
+        assertTrue(veHemi.nonTransferableSeedingFinalized());
         assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0);
 
         // 7. Global curve still correct (additive with V2, no regression).
@@ -485,7 +485,7 @@ contract VeHemiV2UpgradeLocalTest is Test {
         vm.prank(admin);
         proxyAdmin.upgradeAndCall(ITransparentUpgradeableProxy(address(proxy)), address(newImpl), "");
 
-        assertFalse(veHemi.lockedSeedingFinalized());
+        assertFalse(veHemi.nonTransferableSeedingFinalized());
         assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0);
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0);
 

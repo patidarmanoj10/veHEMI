@@ -15,19 +15,19 @@ import {VeHemiStorageV2} from "./storage/VeHemiStorageV2.sol";
 /**
  * @title VeHemi
  * @notice Vesting and yield system based on Curve's veCRV and AERO voting escrow mechanism. Users lock HEMI for up to 4 years.
- * @dev V2 adds parallel locked + forfeitable subcurves tracking non-transferable and
+ * @dev V2 adds parallel non-transferable + forfeitable subcurves tracking non-transferable and
  *      forfeitable stake weight alongside the global curve. The subcurves are gated
- *      behind `lockedSeedingFinalized`, which is a ONE-WAY latch:
+ *      behind `nonTransferableSeedingFinalized`, which is a ONE-WAY latch:
  *
- *        - `lockedSeedingFinalized == false` (V1 behavior): `_checkpoint` skips all
+ *        - `nonTransferableSeedingFinalized == false` (V1 behavior): `_checkpoint` skips all
  *          subcurve accumulation. Contract is bytecode-upgradeable from V1 with
  *          zero behavioral divergence until seeding runs.
- *        - `seedAndFinalizeLockedPositions(tokenIds)` (one-shot, owner-only): computes
+ *        - `seedAndFinalizeNonTransferablePositions(tokenIds)` (one-shot, owner-only): computes
  *          aggregate bias/slope for all existing non-transferable positions in memory,
- *          writes the locked + forfeitable LockedPoints, then flips the latch to true.
- *        - `lockedSeedingFinalized == true` (V2 behavior): subcurve logic is live.
+ *          writes the non-transferable + forfeitable SupplyPoints, then flips the latch to true.
+ *        - `nonTransferableSeedingFinalized == true` (V2 behavior): subcurve logic is live.
  *          There is NO un-finalize path. A missed position at seeding time permanently
- *          understates the locked subcurve with no on-chain recovery.
+ *          understates the non-transferable subcurve with no on-chain recovery.
  *
  *      V2 checkpoint math is strictly additive: the global curve produces identical
  *      values pre- and post-seeding. Only the NEW subcurve reads (supplyBreakdown,
@@ -428,11 +428,11 @@ contract VeHemi is
 
     /**
      * @notice Internal function to checkpoint user and global point histories.
-     * @dev V2: Maintains parallel locked and forfeitable subcurves.
-     *      - Locked curve: all non-transferrable positions (transferableAfter != 0)
+     * @dev V2: Maintains parallel non-transferable and forfeitable subcurves.
+     *      - Non-transferable curve: all non-transferrable positions (transferableAfter != 0)
      *      - Forfeitable curve: forfeitable non-transferrable positions (strict subset of locked)
      *      Both share the same epoch counter as the global curve.
-     *      All subcurve tracking is gated on `lockedSeedingFinalized` to prevent corruption
+     *      All subcurve tracking is gated on `nonTransferableSeedingFinalized` to prevent corruption
      *      during the seeding window.
      *
      *      V1-COMPATIBILITY INVARIANT: the global-curve computations (Point arithmetic,
@@ -440,9 +440,9 @@ contract VeHemi is
      *      identical to the V1 implementation. The V2 additions are strictly additive:
      *          (a) compute `_curveFlags` from `transferableAfter` / `forfeitable` — side-effect free,
      *          (b) compute `_oldSubcurveBias` / `_newSubcurveBias` using `min(lock.end, transferableAfter)`,
-     *          (c) write to `lockedGlobalPointHistory` / `forfeitableGlobalPointHistory` /
-     *              `lockedSlopeChanges` / `forfeitableSlopeChanges` — disjoint storage from V1,
-     *          (d) every subcurve branch is guarded by `lockedSeedingFinalized`, so pre-seeding
+     *          (c) write to `nonTransferableGlobalPointHistory` / `forfeitableGlobalPointHistory` /
+     *              `nonTransferableSlopeChanges` / `forfeitableSlopeChanges` — disjoint storage from V1,
+     *          (d) every subcurve branch is guarded by `nonTransferableSeedingFinalized`, so pre-seeding
      *              this function is a pure V1 checkpoint.
      *      This means upgrading the implementation (before seeding) cannot alter the global
      *      curve's view of any historical or future timestamp.
@@ -487,11 +487,11 @@ contract VeHemi is
                     (newLocked_.end - block.timestamp).toInt256().toInt128();
             }
 
-            if (lockedSeedingFinalized && transferableAfter[tokenId_] != 0) {
+            if (nonTransferableSeedingFinalized && transferableAfter[tokenId_] != 0) {
                 uint256 _ta = transferableAfter[tokenId_];
                 bool _isForfeitable = forfeitable[tokenId_];
 
-                // Old flags: position was in subcurves if it had active locked data
+                // Old flags: position was in subcurves if it had active non-transferable data
                 // AND was still within the non-transferability window at the old state.
                 // We use the old lock's end to determine if the position was previously tracked.
                 if (oldLocked_.end > 0 && oldLocked_.amount > 0 && _ta > block.timestamp) {
@@ -533,11 +533,11 @@ contract VeHemi is
                 _lastPoint = globalPointHistory[_epoch];
             }
 
-            // V2: Load locked + forfeitable points (only after seeding is finalized)
-            LockedPoint memory _lastLockedPoint;
-            LockedPoint memory _lastForfeitablePoint;
-            if (_epoch > 0 && lockedSeedingFinalized) {
-                _lastLockedPoint = lockedGlobalPointHistory[_epoch];
+            // V2: Load non-transferable + forfeitable points (only after seeding is finalized)
+            SupplyPoint memory _lastNonTransferablePoint;
+            SupplyPoint memory _lastForfeitablePoint;
+            if (_epoch > 0 && nonTransferableSeedingFinalized) {
+                _lastNonTransferablePoint = nonTransferableGlobalPointHistory[_epoch];
                 _lastForfeitablePoint = forfeitableGlobalPointHistory[_epoch];
             }
 
@@ -581,14 +581,14 @@ contract VeHemi is
                         _lastPoint.slope = 0;
                     }
 
-                    // V2: Locked + forfeitable curve decay (parallel tracking)
+                    // V2: Non-transferable + forfeitable curve decay (parallel tracking)
                     // Slope changes read inline (no temp vars) to avoid stack-too-deep.
-                    if (lockedSeedingFinalized) {
-                        _lastLockedPoint.bias -= _lastLockedPoint.slope * _dt;
-                        if (_atBoundary) _lastLockedPoint.slope += lockedSlopeChanges[t_i];
-                        if (_lastLockedPoint.bias < 0) _lastLockedPoint.bias = 0;
-                        if (_lastLockedPoint.slope < 0) _lastLockedPoint.slope = 0;
-                        _lastLockedPoint.timestamp = t_i.toUint64();
+                    if (nonTransferableSeedingFinalized) {
+                        _lastNonTransferablePoint.bias -= _lastNonTransferablePoint.slope * _dt;
+                        if (_atBoundary) _lastNonTransferablePoint.slope += nonTransferableSlopeChanges[t_i];
+                        if (_lastNonTransferablePoint.bias < 0) _lastNonTransferablePoint.bias = 0;
+                        if (_lastNonTransferablePoint.slope < 0) _lastNonTransferablePoint.slope = 0;
+                        _lastNonTransferablePoint.timestamp = t_i.toUint64();
 
                         _lastForfeitablePoint.bias -= _lastForfeitablePoint.slope * _dt;
                         if (_atBoundary) _lastForfeitablePoint.slope += forfeitableSlopeChanges[t_i];
@@ -605,16 +605,16 @@ contract VeHemi is
                     _epoch += 1;
                     if (t_i == block.timestamp) {
                         _lastPoint.blockNumber = block.number.toUint64();
-                        if (lockedSeedingFinalized) {
-                            _lastLockedPoint.blockNumber = block.number.toUint64();
+                        if (nonTransferableSeedingFinalized) {
+                            _lastNonTransferablePoint.blockNumber = block.number.toUint64();
                             _lastForfeitablePoint.blockNumber = block.number.toUint64();
                         }
                         break;
                     } else {
                         globalPointHistory[_epoch] = _lastPoint;
-                        if (lockedSeedingFinalized) {
-                            _lastLockedPoint.blockNumber = _lastPoint.blockNumber;
-                            lockedGlobalPointHistory[_epoch] = _lastLockedPoint;
+                        if (nonTransferableSeedingFinalized) {
+                            _lastNonTransferablePoint.blockNumber = _lastPoint.blockNumber;
+                            nonTransferableGlobalPointHistory[_epoch] = _lastNonTransferablePoint;
                             _lastForfeitablePoint.blockNumber = _lastPoint.blockNumber;
                             forfeitableGlobalPointHistory[_epoch] = _lastForfeitablePoint;
                         }
@@ -622,7 +622,7 @@ contract VeHemi is
                 }
             }
 
-            // --- Phase C: Apply user delta to global + locked + forfeitable points ---
+            // --- Phase C: Apply user delta to global + non-transferable + forfeitable points ---
             // V2: Subcurve deltas use separate old/new flags and subcurve-specific biases.
             //     oldFlags (low nibble of _curveFlags): determines removal from subcurves
             //     newFlags (high nibble of _curveFlags): determines addition to subcurves
@@ -637,7 +637,7 @@ contract VeHemi is
                     _lastPoint.bias = 0;
                 }
 
-                // V2: Locked curve — apply old removal + new addition separately
+                // V2: Non-transferable curve — apply old removal + new addition separately
                 uint8 _oldFlags = _curveFlags & 0x0F;
                 uint8 _newFlags = (_curveFlags >> 4) & 0x0F;
                 if (_oldFlags >= 1 || _newFlags >= 1) {
@@ -646,10 +646,10 @@ contract VeHemi is
                     int128 _slopeDelta;
                     if (_newFlags >= 1) _slopeDelta += _newUserPoint.slope;
                     if (_oldFlags >= 1) _slopeDelta -= _oldUserPoint.slope;
-                    _lastLockedPoint.slope += _slopeDelta;
-                    _lastLockedPoint.bias += (_newSubcurveBias - _oldSubcurveBias);
-                    if (_lastLockedPoint.slope < 0) _lastLockedPoint.slope = 0;
-                    if (_lastLockedPoint.bias < 0) _lastLockedPoint.bias = 0;
+                    _lastNonTransferablePoint.slope += _slopeDelta;
+                    _lastNonTransferablePoint.bias += (_newSubcurveBias - _oldSubcurveBias);
+                    if (_lastNonTransferablePoint.slope < 0) _lastNonTransferablePoint.slope = 0;
+                    if (_lastNonTransferablePoint.bias < 0) _lastNonTransferablePoint.bias = 0;
 
                     // Forfeitable curve — same logic, only for flags == 2
                     if (_oldFlags == 2 || _newFlags == 2) {
@@ -664,20 +664,20 @@ contract VeHemi is
                 }
             }
 
-            // Write global + locked + forfeitable points (same overwrite-vs-append logic)
+            // Write global + non-transferable + forfeitable points (same overwrite-vs-append logic)
             if (_epoch != 1 && globalPointHistory[_epoch - 1].timestamp == block.timestamp) {
                 _writtenEpoch = _epoch - 1;
                 globalPointHistory[_writtenEpoch] = _lastPoint;
-                if (lockedSeedingFinalized) {
-                    lockedGlobalPointHistory[_writtenEpoch] = _lastLockedPoint;
+                if (nonTransferableSeedingFinalized) {
+                    nonTransferableGlobalPointHistory[_writtenEpoch] = _lastNonTransferablePoint;
                     forfeitableGlobalPointHistory[_writtenEpoch] = _lastForfeitablePoint;
                 }
             } else {
                 _writtenEpoch = _epoch;
                 epoch = _epoch;
                 globalPointHistory[_epoch] = _lastPoint;
-                if (lockedSeedingFinalized) {
-                    lockedGlobalPointHistory[_epoch] = _lastLockedPoint;
+                if (nonTransferableSeedingFinalized) {
+                    nonTransferableGlobalPointHistory[_epoch] = _lastNonTransferablePoint;
                     forfeitableGlobalPointHistory[_epoch] = _lastForfeitablePoint;
                 }
             }
@@ -714,7 +714,7 @@ contract VeHemi is
      *      exits the subcurve), not at lock.end.
      *
      *      Flag encoding (per nibble): 0 = transferable (global only, no subcurves),
-     *                                  1 = non-transferable (global + locked subcurve),
+     *                                  1 = non-transferable (global + non-transferable subcurve),
      *                                  2 = non-transferable + forfeitable (all three curves).
      *      The packing uses: `[newFlags:4..7][oldFlags:0..3]`. Old flags describe what
      *      subcurves the position WAS tracked in (what to unwind); new flags describe
@@ -776,7 +776,7 @@ contract VeHemi is
     }
 
     /**
-     * @dev Schedules locked + forfeitable slope changes at subcurve-specific endpoints.
+     * @dev Schedules non-transferable + forfeitable slope changes at subcurve-specific endpoints.
      *      Separated to manage stack depth.
      */
     function _scheduleSubcurveSlopeChanges(
@@ -787,20 +787,20 @@ contract VeHemi is
         int128 oldSlope_,
         int128 newSlope_
     ) internal {
-        // --- Locked curve slope changes ---
+        // --- Non-transferable curve slope changes ---
         if (oldFlags_ >= 1 && oldSubEnd_ > block.timestamp) {
-            int128 _oldLockedDslope = lockedSlopeChanges[oldSubEnd_];
-            _oldLockedDslope += oldSlope_;
+            int128 _oldNonTransferableDslope = nonTransferableSlopeChanges[oldSubEnd_];
+            _oldNonTransferableDslope += oldSlope_;
             if (newFlags_ >= 1 && newSubEnd_ == oldSubEnd_) {
-                _oldLockedDslope -= newSlope_;
+                _oldNonTransferableDslope -= newSlope_;
             }
-            lockedSlopeChanges[oldSubEnd_] = _oldLockedDslope;
+            nonTransferableSlopeChanges[oldSubEnd_] = _oldNonTransferableDslope;
         }
 
         if (newFlags_ >= 1 && newSubEnd_ > block.timestamp && newSubEnd_ > oldSubEnd_) {
-            int128 _newLockedDslope = lockedSlopeChanges[newSubEnd_];
-            _newLockedDslope -= newSlope_;
-            lockedSlopeChanges[newSubEnd_] = _newLockedDslope;
+            int128 _newNonTransferableDslope = nonTransferableSlopeChanges[newSubEnd_];
+            _newNonTransferableDslope -= newSlope_;
+            nonTransferableSlopeChanges[newSubEnd_] = _newNonTransferableDslope;
         }
 
         // --- Forfeitable curve slope changes (same logic, only for flags == 2) ---
@@ -963,34 +963,34 @@ contract VeHemi is
     // =========================================================================
 
     /**
-     * @notice Seeds all non-transferrable positions and finalizes the locked + forfeitable curves atomically.
-     * @dev Computes bias/slope entirely in memory for both locked and forfeitable subsets.
-     *      Calls _checkpoint to advance the epoch while lockedSeedingFinalized is still false
-     *      (so subcurve logic is skipped), then writes both LockedPoints.
+     * @notice Seeds all non-transferrable positions and finalizes the non-transferable + forfeitable curves atomically.
+     * @dev Computes bias/slope entirely in memory for both non-transferable and forfeitable subsets.
+     *      Calls _checkpoint to advance the epoch while nonTransferableSeedingFinalized is still false
+     *      (so subcurve logic is skipped), then writes both SupplyPoints.
      *      Forfeitable positions are those where forfeitable[tokenId] == true.
      *      Callable once. Gas: ~4-7M depending on forfeitable count.
      *
-     *      Slope-write timing: `lockedSlopeChanges[_subEnd]` and `forfeitableSlopeChanges[_subEnd]`
+     *      Slope-write timing: `nonTransferableSlopeChanges[_subEnd]` and `forfeitableSlopeChanges[_subEnd]`
      *      are written during Phase 1 at each position's effective subcurve end
      *      (`min(lock.end, transferableAfter)`), which is always >= block.timestamp (positions
-     *      with `_ta <= block.timestamp` are skipped). The Phase 3 LockedPoint is written at
+     *      with `_ta <= block.timestamp` are skipped). The Phase 3 SupplyPoint is written at
      *      `block.timestamp`, NOT at a SIX_DAYS-rounded timestamp. This is safe because
-     *      `_subcurveSupplyAt` reads the most recent LockedPoint at or before the query
+     *      `_subcurveSupplyAt` reads the most recent SupplyPoint at or before the query
      *      timestamp and walks forward on the SIX_DAYS grid, picking up the just-written
      *      future slope changes without revisiting `block.timestamp`.
      *
      *      Input constraints: `tokenIds_` MUST be strictly ascending and contain every
      *      active non-transferable position. Missed positions permanently understate the
-     *      locked subcurve (no retroactive seeding path).
+     *      non-transferable subcurve (no retroactive seeding path).
      * @param tokenIds_ Array of non-transferrable token IDs (must not be empty)
      */
-    function seedAndFinalizeLockedPositions(uint256[] calldata tokenIds_) external onlyOwner {
-        if (lockedSeedingFinalized) revert SeedingAlreadyFinalized();
+    function seedAndFinalizeNonTransferablePositions(uint256[] calldata tokenIds_) external onlyOwner {
+        if (nonTransferableSeedingFinalized) revert SeedingAlreadyFinalized();
         if (tokenIds_.length == 0) revert EmptyArray();
 
         // Require strictly ascending token IDs to prevent double-counting.
         // Duplicate IDs would permanently corrupt the curves since this
-        // function can only be called once (lockedSeedingFinalized gate).
+        // function can only be called once (nonTransferableSeedingFinalized gate).
         for (uint256 i = 1; i < tokenIds_.length; ++i) {
             if (tokenIds_[i] <= tokenIds_[i - 1]) revert UnsortedOrDuplicateTokenIds();
         }
@@ -1017,7 +1017,7 @@ contract VeHemi is
                 uint256 _subEnd = _lock.end < _ta ? _lock.end : _ta;
                 _totalSlope += slope;
                 _totalBias += slope * uint256(_subEnd).toInt256().toInt128();
-                lockedSlopeChanges[_subEnd] -= slope;
+                nonTransferableSlopeChanges[_subEnd] -= slope;
 
                 // Forfeitable subset
                 if (forfeitable[tokenId]) {
@@ -1032,20 +1032,20 @@ contract VeHemi is
         }
 
         // --- Phase 2: Advance global epoch to block.timestamp ---
-        // lockedSeedingFinalized is still false, so _checkpoint skips all subcurve
+        // nonTransferableSeedingFinalized is still false, so _checkpoint skips all subcurve
         // logic. The already-written slope changes are invisible to the catchup loop.
         _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
 
-        // --- Phase 3: Write locked + forfeitable points at current epoch ---
+        // --- Phase 3: Write non-transferable + forfeitable points at current epoch ---
         uint256 _epoch = epoch;
         int128 _tsInt = uint256(block.timestamp).toInt256().toInt128();
 
-        // Locked point: derive bias at block.timestamp
-        int128 _lockedBias = _totalBias - _totalSlope * _tsInt;
-        if (_lockedBias < 0) _lockedBias = 0;
+        // Non-transferable point: derive bias at block.timestamp
+        int128 _nonTransferableBias = _totalBias - _totalSlope * _tsInt;
+        if (_nonTransferableBias < 0) _nonTransferableBias = 0;
 
-        lockedGlobalPointHistory[_epoch] = LockedPoint({
-            bias: _lockedBias,
+        nonTransferableGlobalPointHistory[_epoch] = SupplyPoint({
+            bias: _nonTransferableBias,
             slope: _totalSlope,
             timestamp: block.timestamp.toUint64(),
             blockNumber: block.number.toUint64()
@@ -1055,7 +1055,7 @@ contract VeHemi is
         int128 _forfeitableBias = _totalForfeitableBias - _totalForfeitableSlope * _tsInt;
         if (_forfeitableBias < 0) _forfeitableBias = 0;
 
-        forfeitableGlobalPointHistory[_epoch] = LockedPoint({
+        forfeitableGlobalPointHistory[_epoch] = SupplyPoint({
             bias: _forfeitableBias,
             slope: _totalForfeitableSlope,
             timestamp: block.timestamp.toUint64(),
@@ -1063,8 +1063,8 @@ contract VeHemi is
         });
 
         // --- Phase 4: Finalize ---
-        lockedSeedingFinalized = true;
-        emit LockedSeedingFinalized(_epoch);
+        nonTransferableSeedingFinalized = true;
+        emit NonTransferableSeedingFinalized(_epoch);
     }
 
     /**
@@ -1110,8 +1110,8 @@ contract VeHemi is
      *        (a) integer-rounding skew between curves (subcurves use min(end, transferableAfter)
      *            and a separate slope-changes mapping, so their truncation behavior under
      *            the linear-decay formula can drift by a few wei),
-     *        (b) the period before `seedAndFinalizeLockedPositions` runs, where the locked
-     *            and forfeitable LockedPoints are unwritten (timestamp == 0) and therefore
+     *        (b) the period before `seedAndFinalizeNonTransferablePositions` runs, where the locked
+     *            and forfeitable SupplyPoints are unwritten (timestamp == 0) and therefore
      *            return 0 — without the cap a subsequent off-by-one in seeding could surface
      *            as `locked > total` to downstream consumers,
      *        (c) any future bug that violates the algebraic invariant; the caps keep the
@@ -1127,12 +1127,12 @@ contract VeHemi is
         if (_epoch == 0) return (0, 0, 0, 0);
         total = _supplyAt(globalPointHistory[_epoch], block.timestamp);
 
-        LockedPoint memory _lp = lockedGlobalPointHistory[_epoch];
+        SupplyPoint memory _lp = nonTransferableGlobalPointHistory[_epoch];
         if (_lp.timestamp != 0) {
             locked_ = _subcurveSupplyAtFromPoint(_lp, block.timestamp, false);
         }
 
-        LockedPoint memory _rp = forfeitableGlobalPointHistory[_epoch];
+        SupplyPoint memory _rp = forfeitableGlobalPointHistory[_epoch];
         if (_rp.timestamp != 0) {
             forfeitable_ = _subcurveSupplyAtFromPoint(_rp, block.timestamp, true);
         }
@@ -1147,24 +1147,24 @@ contract VeHemi is
      * @dev Parameterized subcurve supply-at query. Reads from either
      *      locked or forfeitable point history and slope changes.
      * @param timestamp_ The timestamp to query
-     * @param isForfeitable_ true = forfeitable curve, false = locked curve
+     * @param isForfeitable_ true = forfeitable curve, false = non-transferable curve
      */
     function _subcurveSupplyAt(uint256 timestamp_, bool isForfeitable_) internal view returns (uint256) {
         uint256 _epoch = _getPastGlobalPointIndex(epoch, timestamp_);
         if (_epoch == 0) return 0;
-        LockedPoint memory _point = isForfeitable_
+        SupplyPoint memory _point = isForfeitable_
             ? forfeitableGlobalPointHistory[_epoch]
-            : lockedGlobalPointHistory[_epoch];
+            : nonTransferableGlobalPointHistory[_epoch];
         // Pre-V2 epochs have all-zero points (timestamp == 0)
         if (_point.timestamp == 0) return 0;
         return _subcurveSupplyAtFromPoint(_point, timestamp_, isForfeitable_);
     }
 
     /**
-     * @dev Walk forward from a LockedPoint applying slope changes to compute supply at timestamp_.
-     *      Shared between locked and forfeitable curves — differs only in which slope change mapping is read.
+     * @dev Walk forward from a SupplyPoint applying slope changes to compute supply at timestamp_.
+     *      Shared between non-transferable and forfeitable curves — differs only in which slope change mapping is read.
      */
-    function _subcurveSupplyAtFromPoint(LockedPoint memory point_, uint256 timestamp_, bool isForfeitable_) internal view returns (uint256) {
+    function _subcurveSupplyAtFromPoint(SupplyPoint memory point_, uint256 timestamp_, bool isForfeitable_) internal view returns (uint256) {
         int128 bias = point_.bias;
         int128 slope = point_.slope;
         uint256 ts = point_.timestamp;
@@ -1176,7 +1176,7 @@ contract VeHemi is
             if (t_i > timestamp_) {
                 t_i = timestamp_;
             } else {
-                dSlope = isForfeitable_ ? forfeitableSlopeChanges[t_i] : lockedSlopeChanges[t_i];
+                dSlope = isForfeitable_ ? forfeitableSlopeChanges[t_i] : nonTransferableSlopeChanges[t_i];
             }
             bias -= slope * (t_i - ts).toInt256().toInt128();
             if (t_i == timestamp_) {

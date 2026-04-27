@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.29;
 
-import "./LockedCurveTestBase.sol";
+import "./NonTransferableCurveTestBase.sol";
 import "../src/storage/VeHemiStorageV2.sol";
 
 /// @title VeHemiForfeitableCurveTest
@@ -9,10 +9,10 @@ import "../src/storage/VeHemiStorageV2.sol";
 ///
 /// The forfeitable subcurve tracks positions that are BOTH non-transferrable
 /// (transferableAfter != 0) AND forfeitable (forfeitable[tokenId] == true).
-/// This is a strict subset of the locked curve (all non-transferrable positions).
+/// This is a strict subset of the non-transferable curve (all non-transferrable positions).
 ///
 /// Test categories:
-///   1. Seeding — forfeitable partition in seedAndFinalizeLockedPositions
+///   1. Seeding — forfeitable partition in seedAndFinalizeNonTransferablePositions
 ///   2. supplyBreakdown — 4-tuple correctness and defensive caps
 ///   3. forfeitableTotalVeHemiSupply — current and historical queries
 ///   4. increaseAmount — forfeitable curve updated for forfeitable positions
@@ -24,7 +24,7 @@ import "../src/storage/VeHemiStorageV2.sol";
 ///  10. Invariants — recallable <= locked <= total at all times
 ///  11. Edge cases — zero forfeitable at seeding, all forfeitable, same-block ops
 ///  12. Fuzz tests — randomized amounts, durations, and mixed position types
-contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
+contract VeHemiForfeitableCurveTest is NonTransferableCurveTestBase {
     // ── Constants ────────────────────────────────────────────────────────
     uint256 constant LOCK_2Y = 2 * 365 days;
     uint256 constant LOCK_3Y = 3 * 365 days;
@@ -33,7 +33,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     // ── Helpers ──────────────────────────────────────────────────────────
 
     /// @dev Create a non-transferrable, non-forfeitable lock
-    function createLockedPosition(
+    function createNonTransferablePosition(
         address account_,
         uint256 amount_,
         uint256 duration_
@@ -78,7 +78,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     }
 
     function seedAndFinalize(uint256[] memory tokenIds_) public {
-        veHemi.seedAndFinalizeLockedPositions(tokenIds_);
+        veHemi.seedAndFinalizeNonTransferablePositions(tokenIds_);
     }
 
     function _toArray(uint256 a) internal pure returns (uint256[] memory arr) {
@@ -130,32 +130,32 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     }
 
     function test_Seeding_NonForfeitableNotInForfeitableCurve() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1));
 
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Non-forfeitable should not be in forfeitable curve");
-        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "But should be in locked curve");
+        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "But should be in non-transferable curve");
     }
 
     function test_Seeding_MixedPartition() public {
-        (uint256 t1, uint256 s1, uint256 e1) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (uint256 t1, uint256 s1, uint256 e1) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         (uint256 t2, uint256 s2, uint256 e2) = createForfeitablePosition(bob, 200 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
 
-        uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupply = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableSupply = veHemi.forfeitableTotalVeHemiSupply();
 
-        uint256 expectedLocked = s1 * (e1 - block.timestamp) + s2 * (e2 - block.timestamp);
+        uint256 expectedNonTransferable = s1 * (e1 - block.timestamp) + s2 * (e2 - block.timestamp);
         uint256 expectedForfeitable = s2 * (e2 - block.timestamp);
 
-        assertEq(lockedSupply, expectedLocked, "Locked should include both");
+        assertEq(nonTransferableSupply, expectedNonTransferable, "Non-transferable should include both");
         assertEq(forfeitableSupply, expectedForfeitable, "Forfeitable should only include bob");
-        assertGt(lockedSupply, forfeitableSupply, "Locked must exceed forfeitable");
+        assertGt(nonTransferableSupply, forfeitableSupply, "Locked must exceed forfeitable");
     }
 
     function test_Seeding_WritesForfeitableSlopeChanges() public {
         (uint256 t1, uint256 s1, uint256 e1) = createForfeitablePosition(alice, 100 ether, LOCK_2Y);
-        (uint256 t2, uint256 s2, uint256 e2) = createLockedPosition(bob, 200 ether, LOCK_2Y);
+        (uint256 t2, uint256 s2, uint256 e2) = createNonTransferablePosition(bob, 200 ether, LOCK_2Y);
         assertEq(e1, e2, "Same duration same block => same end time");
         seedAndFinalize(_toArray(t1, t2));
 
@@ -166,17 +166,17 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
             "forfeitableSlopeChanges at forfeitable end"
         );
 
-        // lockedSlopeChanges should have slopes for both (more negative)
+        // nonTransferableSlopeChanges should have slopes for both (more negative)
         assertEq(
-            veHemi.lockedSlopeChanges(e1),
+            veHemi.nonTransferableSlopeChanges(e1),
             -int128(int256(s1 + s2)),
-            "lockedSlopeChanges at shared end (both positions)"
+            "nonTransferableSlopeChanges at shared end (both positions)"
         );
     }
 
     function test_Seeding_ZeroForfeitablePositions() public {
-        // All positions are locked-only (not forfeitable)
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        // All positions are non-transferable-only (not forfeitable)
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1));
 
         // Forfeitable supply should be 0 but function should not revert
@@ -185,7 +185,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         // Supply breakdown should work
         (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable) = veHemi.supplyBreakdown();
         assertEq(forfeitable_, 0, "Forfeitable in breakdown should be 0");
-        assertGt(locked_, 0, "Locked should be positive");
+        assertGt(locked_, 0, "Non-transferable should be positive");
         assertEq(transferable, 0, "No transferable positions");
         assertEq(total, locked_, "Total should equal locked");
     }
@@ -210,8 +210,8 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     // ═════════════════════════════════════════════════════════════════════
 
     function test_SupplyBreakdown_AllThreePositionTypes() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);       // locked only
-        (uint256 t2,,) = createForfeitablePosition(bob, 100 ether, LOCK_2Y);    // locked + forfeitable
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);       // locked only
+        (uint256 t2,,) = createForfeitablePosition(bob, 100 ether, LOCK_2Y);    // non-transferable + forfeitable
         createTransferablePosition(charlie, 100 ether, LOCK_2Y);                 // transferable
 
         seedAndFinalize(_toArray(t1, t2));
@@ -219,15 +219,15 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         (uint256 total, uint256 locked_, uint256 forfeitable_, uint256 transferable) = veHemi.supplyBreakdown();
 
         assertGt(total, 0, "Total should be positive");
-        assertGt(locked_, 0, "Locked should be positive");
+        assertGt(locked_, 0, "Non-transferable should be positive");
         assertGt(forfeitable_, 0, "Forfeitable should be positive");
         assertGt(transferable, 0, "Transferable should be positive");
         assertEq(total, locked_ + transferable, "total = locked + transferable");
         assertLe(forfeitable_, locked_, "forfeitable <= locked");
-        assertLt(forfeitable_, locked_, "forfeitable < locked (alice is locked-only)");
+        assertLt(forfeitable_, locked_, "forfeitable < non-transferable (alice is non-transferable-only)");
     }
 
-    function test_SupplyBreakdown_ForfeitableLessThanOrEqualLocked() public {
+    function test_SupplyBreakdown_ForfeitableLessThanOrEqualNonTransferable() public {
         (uint256 t1,,) = createForfeitablePosition(alice, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1));
 
@@ -236,7 +236,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     }
 
     function test_SupplyBreakdown_ConsistencyWithIndividualFunctions() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, 200 ether, LOCK_2Y);
         createTransferablePosition(charlie, 150 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
@@ -322,14 +322,14 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         assertGt(after_, before, "Forfeitable supply should increase after increaseAmount");
     }
 
-    function test_IncreaseAmount_LockedOnlyDoesNotAffectForfeitable() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+    function test_IncreaseAmount_NonTransferableOnlyDoesNotAffectForfeitable() public {
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
 
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
 
-        // Increase amount on locked-only (non-forfeitable) position
+        // Increase amount on non-transferable-only (non-forfeitable) position
         vm.startPrank(alice);
         hemi.mint(alice, 50 ether);
         hemi.approve(address(veHemi), type(uint256).max);
@@ -337,7 +337,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         vm.stopPrank();
 
         uint256 forfeitableAfter = veHemi.forfeitableTotalVeHemiSupply();
-        assertEq(forfeitableAfter, forfeitableBefore, "Forfeitable should not change for locked-only increase");
+        assertEq(forfeitableAfter, forfeitableBefore, "Forfeitable should not change for non-transferable-only increase");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -406,15 +406,15 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         seedAndFinalize(_toArray(t1, t2));
 
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
 
         veHemi.forfeit(t1);
 
         uint256 forfeitableAfter = veHemi.forfeitableTotalVeHemiSupply();
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
 
         assertLt(forfeitableAfter, forfeitableBefore, "Forfeitable should decrease after forfeit");
-        assertLt(lockedAfter, lockedBefore, "Locked should also decrease after forfeit");
+        assertLt(nonTransferableSupplyAfter, nonTransferableSupplyBefore, "Non-transferable should also decrease after forfeit");
     }
 
     function test_Forfeit_UnwindsSlopeChanges() public {
@@ -445,22 +445,22 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Should be 0 after only position forfeited");
     }
 
-    function test_Forfeit_LockedOnlyNotAffected() public {
+    function test_Forfeit_NonTransferableOnlyNotAffected() public {
         _enableForfeitAdmin();
 
         (uint256 t1,,) = createForfeitablePosition(alice, 100 ether, LOCK_2Y);
-        (uint256 t2,,) = createLockedPosition(bob, 100 ether, LOCK_2Y);
+        (uint256 t2,,) = createNonTransferablePosition(bob, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
 
         veHemi.forfeit(t1);
 
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
 
-        // Locked should decrease by alice's portion, but bob's remains
-        assertGt(lockedAfter, 0, "Bob's locked position should remain");
-        assertLt(lockedAfter, lockedBefore, "Total locked should decrease");
+        // Non-transferable should decrease by alice's portion, but bob's remains
+        assertGt(nonTransferableSupplyAfter, 0, "Bob's non-transferable position should remain");
+        assertLt(nonTransferableSupplyAfter, nonTransferableSupplyBefore, "Total locked should decrease");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -502,7 +502,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     // ═════════════════════════════════════════════════════════════════════
 
     function test_NewForfeitableAfterSeeding_Tracked() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1));
 
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "No forfeitable at seeding");
@@ -515,16 +515,16 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         assertEq(forfeitableSupply, expected, "New post-seeding forfeitable should be tracked");
     }
 
-    function test_NewForfeitableAfterSeeding_LockedAlsoUpdated() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+    function test_NewForfeitableAfterSeeding_NonTransferableAlsoUpdated() public {
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1));
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
 
         createForfeitablePosition(bob, 200 ether, LOCK_2Y);
 
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
-        assertGt(lockedAfter, lockedBefore, "Locked should increase with new forfeitable position");
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        assertGt(nonTransferableSupplyAfter, nonTransferableSupplyBefore, "Non-transferable should increase with new forfeitable position");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -552,30 +552,30 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         assertLt(supply2, supply1, "Should continue decaying");
     }
 
-    function test_CatchupLoop_ForfeitableAndLockedDecayInParallel() public {
+    function test_CatchupLoop_ForfeitableAndNonTransferableDecayInParallel() public {
         (uint256 t1,,) = createForfeitablePosition(alice, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1));
 
         // When only forfeitable positions exist, locked == forfeitable
-        uint256 locked0 = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferable0 = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitable0 = veHemi.forfeitableTotalVeHemiSupply();
-        assertEq(locked0, forfeitable0, "Should be equal when all locked are forfeitable");
+        assertEq(nonTransferable0, forfeitable0, "Should be equal when all locked are forfeitable");
 
         _warpAndCheckpoint(30 days);
 
-        uint256 locked1 = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferable1 = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitable1 = veHemi.forfeitableTotalVeHemiSupply();
-        assertEq(locked1, forfeitable1, "Should remain equal after decay");
+        assertEq(nonTransferable1, forfeitable1, "Should remain equal after decay");
     }
 
     // ═════════════════════════════════════════════════════════════════════
     //  10. INVARIANTS — forfeitable <= locked <= total
     // ═════════════════════════════════════════════════════════════════════
 
-    function test_Invariant_ForfeitableLeLocked_AfterOperations() public {
+    function test_Invariant_ForfeitableLeNonTransferable_AfterOperations() public {
         _enableForfeitAdmin();
 
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, 200 ether, LOCK_2Y);
         createTransferablePosition(charlie, 150 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
@@ -590,13 +590,13 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         vm.stopPrank();
         _assertInvariant("After increaseAmount on forfeitable");
 
-        // increaseAmount on locked-only
+        // increaseAmount on non-transferable-only
         vm.startPrank(alice);
         hemi.mint(alice, 50 ether);
         hemi.approve(address(veHemi), type(uint256).max);
         veHemi.increaseAmount(t1, 50 ether);
         vm.stopPrank();
-        _assertInvariant("After increaseAmount on locked-only");
+        _assertInvariant("After increaseAmount on non-transferable-only");
 
         // Warp forward
         _warpAndCheckpoint(90 days);
@@ -701,11 +701,11 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     //  12. FUZZ TESTS
     // ═════════════════════════════════════════════════════════════════════
 
-    function testFuzz_ForfeitableSubsetOfLocked(uint256 lockedAmt, uint256 forfeitableAmt) public {
+    function testFuzz_ForfeitableSubsetOfNonTransferable(uint256 lockedAmt, uint256 forfeitableAmt) public {
         lockedAmt = bound(lockedAmt, MIN_AMOUNT, 500 ether);
         forfeitableAmt = bound(forfeitableAmt, MIN_AMOUNT, 500 ether);
 
-        (uint256 t1,,) = createLockedPosition(alice, lockedAmt, LOCK_2Y);
+        (uint256 t1,,) = createNonTransferablePosition(alice, lockedAmt, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, forfeitableAmt, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
 
@@ -773,7 +773,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         lockedAmt = bound(lockedAmt, MIN_AMOUNT, 300 ether);
         forfeitableAmt = bound(forfeitableAmt, MIN_AMOUNT, 300 ether);
 
-        (uint256 t1,,) = createLockedPosition(alice, lockedAmt, LOCK_2Y);
+        (uint256 t1,,) = createNonTransferablePosition(alice, lockedAmt, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, forfeitableAmt, LOCK_2Y);
         createTransferablePosition(charlie, transferableAmt, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
@@ -806,7 +806,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         forfeitableAmt = bound(forfeitableAmt, MIN_AMOUNT, 300 ether);
         transferableAmt = bound(transferableAmt, MIN_AMOUNT, 300 ether);
 
-        (uint256 t1,,) = createLockedPosition(alice, lockedAmt, LOCK_2Y);
+        (uint256 t1,,) = createNonTransferablePosition(alice, lockedAmt, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, forfeitableAmt, LOCK_2Y);
         createTransferablePosition(charlie, transferableAmt, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
@@ -850,7 +850,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         lockedDuration = bound(lockedDuration, 2 * SIX_DAYS, MAX_TIME / 2);
         forfeitableDuration = bound(forfeitableDuration, 2 * SIX_DAYS, MAX_TIME / 2);
 
-        (uint256 t1,,) = createLockedPosition(alice, lockedAmt, lockedDuration);
+        (uint256 t1,,) = createNonTransferablePosition(alice, lockedAmt, lockedDuration);
         (uint256 t2,,) = createForfeitablePosition(bob, forfeitableAmt, forfeitableDuration);
         seedAndFinalize(_toArray(t1, t2));
 
@@ -861,8 +861,8 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
     //  13. MEDIUM FIXES — MISSING CROSS-TYPE ISOLATION TESTS
     // ═════════════════════════════════════════════════════════════════════
 
-    function test_IncreaseUnlockTime_LockedOnlyDoesNotAffectForfeitable() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+    function test_IncreaseUnlockTime_NonTransferableOnlyDoesNotAffectForfeitable() public {
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
 
@@ -872,19 +872,19 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         veHemi.increaseUnlockTime(t1, LOCK_3Y);
 
         uint256 forfeitableAfter = veHemi.forfeitableTotalVeHemiSupply();
-        assertEq(forfeitableAfter, forfeitableBefore, "Locked-only increaseUnlockTime should not affect forfeitable");
+        assertEq(forfeitableAfter, forfeitableBefore, "Non-transferable-only increaseUnlockTime should not affect forfeitable");
 
-        // Locked should increase though
-        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), forfeitableAfter, "Locked should exceed forfeitable now");
+        // Non-transferable should increase though
+        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), forfeitableAfter, "Non-transferable should exceed forfeitable now");
     }
 
-    function test_IncreaseAmount_TransferableDoesNotAffectLockedOrForfeitable() public {
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+    function test_IncreaseAmount_TransferableDoesNotAffectNonTransferableOrForfeitable() public {
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, 100 ether, LOCK_2Y);
         createTransferablePosition(charlie, 100 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
 
         // Increase amount on charlie's transferable position
@@ -895,7 +895,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         veHemi.increaseAmount(charlieToken, 50 ether);
         vm.stopPrank();
 
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), lockedBefore, "Locked should not change");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), nonTransferableSupplyBefore, "Non-transferable should not change");
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), forfeitableBefore, "Forfeitable should not change");
     }
 
@@ -1029,7 +1029,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         _enableForfeitAdmin();
 
         // Create all three position types
-        (uint256 t1,,) = createLockedPosition(alice, 100 ether, LOCK_2Y);
+        (uint256 t1,,) = createNonTransferablePosition(alice, 100 ether, LOCK_2Y);
         (uint256 t2,,) = createForfeitablePosition(bob, 200 ether, LOCK_3Y);
         createTransferablePosition(charlie, 150 ether, LOCK_2Y);
         seedAndFinalize(_toArray(t1, t2));
@@ -1048,18 +1048,18 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         veHemi.increaseUnlockTime(t2, MAX_TIME);
         _assertInvariant("After increaseUnlockTime on forfeitable");
 
-        // increaseAmount on locked-only
+        // increaseAmount on non-transferable-only
         vm.startPrank(alice);
         hemi.mint(alice, 50 ether);
         hemi.approve(address(veHemi), type(uint256).max);
         veHemi.increaseAmount(t1, 50 ether);
         vm.stopPrank();
-        _assertInvariant("After increaseAmount on locked-only");
+        _assertInvariant("After increaseAmount on non-transferable-only");
 
-        // increaseUnlockTime on locked-only
+        // increaseUnlockTime on non-transferable-only
         vm.prank(alice);
         veHemi.increaseUnlockTime(t1, LOCK_3Y);
-        _assertInvariant("After increaseUnlockTime on locked-only");
+        _assertInvariant("After increaseUnlockTime on non-transferable-only");
 
         // Warp across boundaries
         _warpAndCheckpoint(90 days);
@@ -1145,10 +1145,10 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
 
         // Before transferableAfter: position is in all 3 curves
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 totalBefore = veHemi.totalVeHemiSupply();
         assertGt(forfeitableBefore, 0, "Forfeitable should be positive before transition");
-        assertGt(lockedBefore, 0, "Locked should be positive before transition");
+        assertGt(nonTransferableSupplyBefore, 0, "Non-transferable should be positive before transition");
 
         // Warp to just past transferableAfter (the original end)
         vm.warp(originalEnd + 1);
@@ -1156,7 +1156,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
 
         // After transferableAfter: position should have EXITED the subcurves
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable should be 0 after transition");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "Locked should be 0 after transition");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "Non-transferable should be 0 after transition");
 
         // But the global curve should still have voting power (lock.end hasn't passed)
         uint256 totalAfter = veHemi.totalVeHemiSupply();
@@ -1214,7 +1214,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         vm.warp(originalEnd + 1);
         veHemi.checkpoint();
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
         uint256 totalBefore = veHemi.totalVeHemiSupply();
 
@@ -1226,7 +1226,7 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         vm.stopPrank();
 
         // Subcurves should be unchanged (position is no longer in them)
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), lockedBefore, "Locked unchanged after transition");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), nonTransferableSupplyBefore, "Locked unchanged after transition");
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), forfeitableBefore, "Forfeitable unchanged after transition");
         // Global should increase
         assertGt(veHemi.totalVeHemiSupply(), totalBefore, "Global should increase");
@@ -1244,8 +1244,8 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         veHemi.increaseUnlockTime(t1, LOCK_3Y);
 
         // Before transition: alice is in locked, bob is in transferable
-        (uint256 total1, uint256 locked1, uint256 forf1, uint256 trans1) = veHemi.supplyBreakdown();
-        assertGt(locked1, 0, "Locked before transition");
+        (uint256 total1, uint256 nonTransferable1, uint256 forf1, uint256 trans1) = veHemi.supplyBreakdown();
+        assertGt(nonTransferable1, 0, "Locked before transition");
         assertGt(trans1, 0, "Transferable before transition");
 
         // Warp past transferableAfter
@@ -1256,11 +1256,11 @@ contract VeHemiForfeitableCurveTest is LockedCurveTestBase {
         // Note: both alice and bob's positions have decayed over the 2-year warp,
         // so we can't compare absolute transferable values. The key invariant is:
         // locked drops to 0 and all remaining supply is transferable.
-        (uint256 total2, uint256 locked2, uint256 forf2, uint256 trans2) = veHemi.supplyBreakdown();
-        assertEq(locked2, 0, "Locked should be 0 (alice exited)");
+        (uint256 total2, uint256 nonTransferable2, uint256 forf2, uint256 trans2) = veHemi.supplyBreakdown();
+        assertEq(nonTransferable2, 0, "Non-transferable should be 0 (alice exited)");
         assertEq(forf2, 0, "Forfeitable should be 0 (alice exited)");
         assertGt(trans2, 0, "Transferable should be positive (bob + alice)");
-        assertEq(total2, trans2, "Total should equal transferable (no locked positions remain)");
+        assertEq(total2, trans2, "Total should equal transferable (no non-transferable positions remain)");
 
         _assertInvariant("After transition");
     }

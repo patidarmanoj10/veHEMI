@@ -62,16 +62,16 @@ VeHemi V2 maintains parallel subcurves alongside the global supply curve to trac
 **Three supply curves:**
 - **Global** (`totalVeHemiSupply`): All positions, decaying linearly to zero at `lock.end`
 - **Locked** (`nonTransferableTotalVeHemiSupply`): Non-transferable positions only, bounded by `transferableAfter`
-- **Forfeitable** (`forfeitableTotalVeHemiSupply`): Forfeitable subset of locked positions, also bounded by `transferableAfter`
+- **Forfeitable** (`forfeitableTotalVeHemiSupply`): Forfeitable subset of non-transferable positions, also bounded by `transferableAfter`
 
 **Invariant:** `forfeitable <= locked <= total` always holds.
 
-**Subcurve transition:** When `block.timestamp >= transferableAfter`, a position exits both the locked and forfeitable subcurves while retaining its full global voting power until `lock.end`. This means:
+**Subcurve transition:** When `block.timestamp >= transferableAfter`, a position exits both the non-transferable and forfeitable subcurves while retaining its full global voting power until `lock.end`. This means:
 - A non-transferable position extended past its original `transferableAfter` becomes transferable at the originally promised time
 - `increaseUnlockTime` does NOT extend `transferableAfter` — the user's transferability promise is preserved
 - The forfeit window is bounded by `transferableAfter` — once a position becomes transferable, it can no longer be forfeited
 
-**Seeding:** The subcurves are initialized via a one-shot `seedAndFinalizeLockedPositions(tokenIds)` call that atomically computes and stores the aggregate bias/slope for all existing non-transferable positions. This function can only be called once (`lockedSeedingFinalized` gate).
+**Seeding:** The subcurves are initialized via a one-shot `seedAndFinalizeNonTransferablePositions(tokenIds)` call that atomically computes and stores the aggregate bias/slope for all existing non-transferable positions. This function can only be called once (`nonTransferableSeedingFinalized` gate).
 
 **Combined supply view:** `supplyBreakdown()` returns `(total, locked, forfeitable, transferable)` in a single call with defensive caps enforcing the ordering invariant.
 
@@ -143,8 +143,8 @@ Individual supply functions:
 // Global aggregate stake weight
 uint256 totalSupply = veHemi.totalVeHemiSupply();
 
-// Non-transferable stake weight (locked subcurve)
-uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
+// Non-transferable stake weight (non-transferable subcurve)
+uint256 nonTransferableSupply = veHemi.nonTransferableTotalVeHemiSupply();
 
 // Forfeitable stake weight (subset of locked)
 uint256 forfeitableSupply = veHemi.forfeitableTotalVeHemiSupply();
@@ -219,7 +219,7 @@ Additional test-quality signals beyond line coverage:
   `invariant_tokenConservation`, `invariant_veHemiSupply`, `invariant_votingPower`,
   `invariant_subcurveOrdering`, `invariant_supplyBreakdownConsistency`, and
   `invariant_epochMonotonicity`. Runs 131,072 mutations per invariant per run.
-- **Fork tests** — 92 in `test/ForkUpgradeLockedCurve.t.sol` (against Hemi
+- **Fork tests** — 92 in `test/ForkUpgradeNonTransferableCurve.t.sol` (against Hemi
   mainnet state via `HEMI_RPC_URL`) and 14 in `test/adapter/VeHemiAragonAdapterFork.t.sol`
   (against Ethereum mainnet Aragon OSx via `ETH_RPC_URL`).
 - **100% declared-error coverage** — every custom error is exercised by at
@@ -253,19 +253,19 @@ The V2 upgrade introduces parallel locked/forfeitable subcurves, hourly delegati
 
 1. **`deploy/04_upgrade_vehemi_v2.ts`** — bundles three transactions for the Gnosis Safe:
    - `upgrade(VeHemiVoteDelegation proxy, new delegation impl)` — upgrades the delegation contract to add hourly checkpoints, `autoDelegate`/`delegateAllFor`/`clearAutoDelegate`, and the trusted-adapter hook consumed by the Aragon adapter.
-   - `upgrade(VeHemi proxy, new VeHemi V2 impl)` — upgrades VeHemi to the V2 implementation. The V2 locked-curve logic is gated by `lockedSeedingFinalized`, so the contract behaves identically to V1 until seeding completes.
-   - `seedAndFinalizeLockedPositions(tokenIds)` — initializes the locked + forfeitable subcurves with the aggregate bias/slope of all existing non-transferable positions.
+   - `upgrade(VeHemi proxy, new VeHemi V2 impl)` — upgrades VeHemi to the V2 implementation. The V2 locked-curve logic is gated by `nonTransferableSeedingFinalized`, so the contract behaves identically to V1 until seeding completes.
+   - `seedAndFinalizeNonTransferablePositions(tokenIds)` — initializes the non-transferable + forfeitable subcurves with the aggregate bias/slope of all existing non-transferable positions.
 
    Both upgrades use bare `upgrade()` (not `upgradeAndCall`) — no initializer is called because the `initializer` modifier would revert on already-initialized proxies.
 
 2. **`deploy/05_aragon_adapter.ts`** — deploys the immutable `VeHemiAragonAdapter` and calls `setTrustedAdapter(adapter)` on `VeHemiVoteDelegation` (owner-only, batched for the Gnosis Safe). Includes pre-flight checks (`voteDelegation() != address(0)`, `totalVeHemiSupply() > 0`) and post-deploy ERC-165 verification (`IVotes`, `ERC165`, `ERC6372`).
 
-⚠️ **`seedAndFinalizeLockedPositions` is one-shot and irreversible.** The function can only be called once (gated by `lockedSeedingFinalized`). The `tokenIds` array MUST include ALL active non-transferable positions, sorted strictly ascending. If any position is missed, the locked subcurve will permanently understate its supply with no recovery path other than a full V3 upgrade. Until seeding completes, `nonTransferableTotalVeHemiSupply()` and `forfeitableTotalVeHemiSupply()` return zero.
+⚠️ **`seedAndFinalizeNonTransferablePositions` is one-shot and irreversible.** The function can only be called once (gated by `nonTransferableSeedingFinalized`). The `tokenIds` array MUST include ALL active non-transferable positions, sorted strictly ascending. If any position is missed, the non-transferable subcurve will permanently understate its supply with no recovery path other than a full V3 upgrade. Until seeding completes, `nonTransferableTotalVeHemiSupply()` and `forfeitableTotalVeHemiSupply()` return zero.
 
 **Pre-execution checklist:**
-- Re-derive the `LOCKED_TOKEN_IDS` array against current on-chain state (positions where `transferableAfter != 0`, `lock.end > block.timestamp`, `amount > 0`).
+- Re-derive the `NON_TRANSFERABLE_TOKEN_IDS` array against current on-chain state (positions where `transferableAfter != 0`, `lock.end > block.timestamp`, `amount > 0`).
 - Verify the array is strictly sorted ascending and contains no duplicates.
-- Run `forge test --match-path test/ForkUpgradeLockedCurve.t.sol --fork-url $HEMI_RPC_URL` to validate the upgrade against mainnet state.
+- Run `forge test --match-path test/ForkUpgradeNonTransferableCurve.t.sol --fork-url $HEMI_RPC_URL` to validate the upgrade against mainnet state.
 - Verify Gnosis Safe calldata against the script-generated batch before signing.
 
 After both scripts complete, configure the Aragon TokenVoting plugin to use the deployed adapter address as its voting token.

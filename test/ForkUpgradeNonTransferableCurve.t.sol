@@ -9,31 +9,31 @@ import "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 import {ITransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 /**
- * @title ForkUpgradeLockedCurveTest
- * @notice Fork test for the VeHemi V2 locked + forfeitable curve upgrade on Hemi mainnet.
+ * @title ForkUpgradeNonTransferableCurveTest
+ * @notice Fork test for the VeHemi V2 non-transferable + forfeitable curve upgrade on Hemi mainnet.
  *
  * @dev Validates:
  *   1. Upgrade preserves ALL existing state (locks, balances, voting power, delegations)
- *   2. Locked + forfeitable curve seeding works with real on-chain positions
+ *   2. Non-transferable + forfeitable curve seeding works with real on-chain positions
  *   3. nonTransferableTotalVeHemiSupply / forfeitableTotalVeHemiSupply return correct values
  *   4. supplyBreakdown 4-tuple is consistent (total == locked + transferable, forfeitable <= locked)
  *   5. Existing operations still work (withdraw, increaseAmount, increaseUnlockTime, transfer)
  *   6. New positions created post-upgrade are tracked correctly in all curves
  *   7. Forfeitable curve activates correctly when forfeitable positions are created post-upgrade
- *   8. Forfeit operation correctly reduces locked + forfeitable curves
+ *   8. Forfeit operation correctly reduces non-transferable + forfeitable curves
  *   9. Historical queries return 0 for pre-V2 timestamps
  *  10. Token conservation: hemi.balanceOf(veHemi) == veHemi.totalLocked()
  *  11. View functions work without preceding checkpoint (exercises catchup loops)
  *
  * IMPORTANT: As of the current scan, Hemi mainnet has ZERO forfeitable positions.
- * All 126 active non-transferrable positions are locked-only (non-forfeitable).
+ * All 126 active non-transferrable positions are non-transferable-only (non-forfeitable).
  * The forfeitable curve tests therefore create NEW forfeitable positions post-upgrade
  * to verify the curve activates correctly.
  *
  * Run with:
- *     forge test --match-contract ForkUpgradeLockedCurveTest --fork-url $HEMI_RPC_URL -vvv
+ *     forge test --match-contract ForkUpgradeNonTransferableCurveTest --fork-url $HEMI_RPC_URL -vvv
  */
-contract ForkUpgradeLockedCurveTest is Test {
+contract ForkUpgradeNonTransferableCurveTest is Test {
     // -- Known Hemi mainnet addresses --
     address constant VEHEMI_PROXY = 0x371d3718D5b7F75EAb050FAe6Da7DF3092031c89;
     address constant PROXY_ADMIN = 0x7e4D4FB40449A56377fD54fC6Dd800fa202c0f0F;
@@ -136,12 +136,12 @@ contract ForkUpgradeLockedCurveTest is Test {
         return ids;
     }
 
-    function _upgradeAndSeed() internal returns (uint256[] memory lockedIds) {
+    function _upgradeAndSeed() internal returns (uint256[] memory nonTransferableIds) {
         _upgradeProxy();
-        lockedIds = _findNonTransferablePositions();
-        if (lockedIds.length > 0) {
+        nonTransferableIds = _findNonTransferablePositions();
+        if (nonTransferableIds.length > 0) {
             vm.prank(GNOSIS_SAFE);
-            veHemi.seedAndFinalizeLockedPositions(lockedIds);
+            veHemi.seedAndFinalizeNonTransferablePositions(nonTransferableIds);
         }
     }
 
@@ -177,8 +177,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(veHemi.totalSupply(), preTotalNFTs, "ERC721 totalSupply changed");
 
         // V2 storage should be zero-initialized
-        assertEq(veHemi.lockedSeedingFinalized(), false, "lockedSeedingFinalized should be false");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "locked supply should be 0 before seeding");
+        assertEq(veHemi.nonTransferableSeedingFinalized(), false, "nonTransferableSeedingFinalized should be false");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "non-transferable supply should be 0 before seeding");
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "forfeitable supply should be 0 before seeding");
 
         // Token conservation: HEMI balance should equal totalLocked
@@ -190,19 +190,19 @@ contract ForkUpgradeLockedCurveTest is Test {
     // ═════════════════════════════════════════════════════════════════════
 
     function testSeedingWithRealPositions() public onlyFork {
-        uint256[] memory lockedIds = _upgradeAndSeed();
+        uint256[] memory nonTransferableIds = _upgradeAndSeed();
 
-        assertTrue(veHemi.lockedSeedingFinalized(), "seeding should be finalized");
-        if (lockedIds.length > 0) {
+        assertTrue(veHemi.nonTransferableSeedingFinalized(), "seeding should be finalized");
+        if (nonTransferableIds.length > 0) {
             assertGt(
                 veHemi.nonTransferableTotalVeHemiSupply(),
                 0,
-                "locked supply should be > 0 after seeding with active positions"
+                "non-transferable supply should be > 0 after seeding with active positions"
             );
         }
 
-        emit log_named_uint("Non-transferable positions seeded", lockedIds.length);
-        emit log_named_uint("Locked supply", veHemi.nonTransferableTotalVeHemiSupply());
+        emit log_named_uint("Non-transferable positions seeded", nonTransferableIds.length);
+        emit log_named_uint("Non-transferable supply", veHemi.nonTransferableTotalVeHemiSupply());
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -227,7 +227,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(forfeitable_, 0, "Mainnet should have zero forfeitable supply at seed time");
 
         emit log_named_uint("Total supply", total);
-        emit log_named_uint("Locked supply", locked);
+        emit log_named_uint("Non-transferable supply", locked);
         emit log_named_uint("Forfeitable supply", forfeitable_);
         emit log_named_uint("Transferable supply", transferable);
     }
@@ -243,7 +243,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Pick 5 known-existing tokens. Use IDs in the recently-active range so they're
         // very likely to exist on mainnet. Verify tokens exist before snapshotting.
         uint256[] memory testIds = new uint256[](10);
-        // 5 tokens from non-transferrable range (likely active locked positions)
+        // 5 tokens from non-transferrable range (likely active non-transferable positions)
         testIds[0] = 28660;
         testIds[1] = 28700;
         testIds[2] = 28750;
@@ -366,7 +366,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     function testNewNonTransferablePositionTrackedPostSeeding() public onlyFork {
         _upgradeAndSeed();
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
 
         // Create a new non-transferable position
         address user = address(0xCAFE);
@@ -376,21 +376,21 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.createLockFor(100 ether, MAX_TIME / 2, user, false, false);
         vm.stopPrank();
 
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
-        assertGt(lockedAfter, lockedBefore, "locked supply should increase with new non-transferable position");
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        assertGt(nonTransferableSupplyAfter, nonTransferableSupplyBefore, "non-transferable supply should increase with new non-transferable position");
         _assertTokenConservation("After new non-transferable position");
     }
 
-    function testNewTransferablePositionDoesNotAffectLockedCurve() public onlyFork {
+    function testNewTransferablePositionDoesNotAffectNonTransferableCurve() public onlyFork {
         _upgradeAndSeed();
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
 
         address user = address(0xCAFE);
         _createTestLock(user, 100 ether, MAX_TIME / 2);
 
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
-        assertEq(lockedAfter, lockedBefore, "locked supply should NOT change for transferable position");
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        assertEq(nonTransferableSupplyAfter, nonTransferableSupplyBefore, "non-transferable supply should NOT change for transferable position");
         _assertTokenConservation("After new transferable position");
     }
 
@@ -398,31 +398,31 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  7. HISTORICAL QUERIES
     // ═════════════════════════════════════════════════════════════════════
 
-    function testHistoricalLockedSupplyBeforeV2IsZero() public onlyFork {
+    function testHistoricalNonTransferableSupplyBeforeV2IsZero() public onlyFork {
         _upgradeAndSeed();
 
-        // Query locked supply at a past timestamp (before V2 upgrade)
+        // Query non-transferable supply at a past timestamp (before V2 upgrade)
         uint256 pastTimestamp = block.timestamp - 7 days;
-        uint256 pastLocked = veHemi.nonTransferableTotalVeHemiSupplyAt(pastTimestamp);
-        assertEq(pastLocked, 0, "locked supply at pre-V2 timestamp should be 0");
+        uint256 pastNonTransferable = veHemi.nonTransferableTotalVeHemiSupplyAt(pastTimestamp);
+        assertEq(pastNonTransferable, 0, "non-transferable supply at pre-V2 timestamp should be 0");
     }
 
     // ═════════════════════════════════════════════════════════════════════
     //  8. LOCKED CURVE DECAYS AFTER TIME WARP
     // ═════════════════════════════════════════════════════════════════════
 
-    function testLockedCurveDecaysOverTime() public onlyFork {
+    function testNonTransferableCurveDecaysOverTime() public onlyFork {
         _upgradeAndSeed();
 
-        uint256 lockedNow = veHemi.nonTransferableTotalVeHemiSupply();
-        assertGt(lockedNow, 0, "Mainnet must have active non-transferable positions");
+        uint256 nonTransferableSupplyNow = veHemi.nonTransferableTotalVeHemiSupply();
+        assertGt(nonTransferableSupplyNow, 0, "Mainnet must have active non-transferable positions");
 
         // Warp forward 30 days and checkpoint (advance block number too)
         _warpAndRoll(30 days);
         veHemi.checkpoint();
 
-        uint256 lockedLater = veHemi.nonTransferableTotalVeHemiSupply();
-        assertLt(lockedLater, lockedNow, "locked supply should decay over time");
+        uint256 nonTransferableSupplyLater = veHemi.nonTransferableTotalVeHemiSupply();
+        assertLt(nonTransferableSupplyLater, nonTransferableSupplyNow, "non-transferable supply should decay over time");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -460,12 +460,12 @@ contract ForkUpgradeLockedCurveTest is Test {
     // ═════════════════════════════════════════════════════════════════════
 
     function testDoubleSeedingReverts() public onlyFork {
-        uint256[] memory lockedIds = _upgradeAndSeed();
-        assertGt(lockedIds.length, 0, "Mainnet must have active non-transferable positions");
+        uint256[] memory nonTransferableIds = _upgradeAndSeed();
+        assertGt(nonTransferableIds.length, 0, "Mainnet must have active non-transferable positions");
 
         vm.prank(GNOSIS_SAFE);
         vm.expectRevert(VeHemi.SeedingAlreadyFinalized.selector);
-        veHemi.seedAndFinalizeLockedPositions(lockedIds);
+        veHemi.seedAndFinalizeNonTransferablePositions(nonTransferableIds);
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -493,18 +493,18 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  13. EXACT LOCKED SUPPLY VERIFICATION (highest priority)
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Compute expected locked supply from real on-chain position data
+    /// @notice Compute expected non-transferable supply from real on-chain position data
     ///         and verify it matches nonTransferableTotalVeHemiSupply EXACTLY.
     /// @dev The stress tests proved that the contract's catchup loop is mathematically
     ///      equivalent to per-position bias summation. We use exact equality here.
-    function testLockedSupplyMatchesSumOfPositionBiases() public onlyFork {
-        uint256[] memory lockedIds = _upgradeAndSeed();
-        assertGt(lockedIds.length, 0, "Mainnet must have active non-transferable positions");
+    function testNonTransferableSupplyMatchesSumOfPositionBiases() public onlyFork {
+        uint256[] memory nonTransferableIds = _upgradeAndSeed();
+        assertGt(nonTransferableIds.length, 0, "Mainnet must have active non-transferable positions");
 
-        // Independently compute expected locked supply from individual positions
+        // Independently compute expected non-transferable supply from individual positions
         uint256 expectedSupply;
-        for (uint256 i; i < lockedIds.length; ++i) {
-            IVeHemi.LockedBalance memory bal = veHemi.getLockedBalance(lockedIds[i]);
+        for (uint256 i; i < nonTransferableIds.length; ++i) {
+            IVeHemi.LockedBalance memory bal = veHemi.getLockedBalance(nonTransferableIds[i]);
             if (bal.amount > 0 && bal.end > block.timestamp) {
                 // slope = amount / MAX_TIME, bias = slope * (end - now)
                 uint256 slope = uint256(uint128(bal.amount)) / MAX_TIME;
@@ -517,10 +517,10 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // EXACT equality — the contract's catchup loop produces identical results to
         // per-position summation when seeded in the same block.
-        assertEq(actualSupply, expectedSupply, "Locked supply does not match sum of individual position biases");
+        assertEq(actualSupply, expectedSupply, "Non-transferable supply does not match sum of individual position biases");
 
-        emit log_named_uint("Expected locked supply", expectedSupply);
-        emit log_named_uint("Actual locked supply", actualSupply);
+        emit log_named_uint("Expected non-transferable supply", expectedSupply);
+        emit log_named_uint("Actual non-transferable supply", actualSupply);
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -531,11 +531,11 @@ contract ForkUpgradeLockedCurveTest is Test {
     function testUpgradeWithoutSeedBehavesLikeV1() public onlyFork {
         _upgradeProxy(); // upgrade only, no seed
 
-        // lockedSeedingFinalized should be false
-        assertEq(veHemi.lockedSeedingFinalized(), false, "should NOT be finalized");
+        // nonTransferableSeedingFinalized should be false
+        assertEq(veHemi.nonTransferableSeedingFinalized(), false, "should NOT be finalized");
 
-        // Locked supply is 0
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "locked supply should be 0");
+        // Non-transferable supply is 0
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "non-transferable supply should be 0");
 
         // Supply breakdown: locked = 0, forfeitable = 0, total = transferable
         (uint256 total, uint256 locked, uint256 forfeitable_, uint256 transferable) = veHemi.supplyBreakdown();
@@ -563,12 +563,12 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.withdraw(tokenId);
 
         // Owner can still seed later
-        uint256[] memory lockedIds = _findNonTransferablePositions();
-        if (lockedIds.length > 0) {
+        uint256[] memory nonTransferableIds = _findNonTransferablePositions();
+        if (nonTransferableIds.length > 0) {
             vm.prank(GNOSIS_SAFE);
-            veHemi.seedAndFinalizeLockedPositions(lockedIds);
-            assertTrue(veHemi.lockedSeedingFinalized(), "seeding should work after delayed activation");
-            assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "locked supply should be > 0 after delayed seed");
+            veHemi.seedAndFinalizeNonTransferablePositions(nonTransferableIds);
+            assertTrue(veHemi.nonTransferableSeedingFinalized(), "seeding should work after delayed activation");
+            assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "non-transferable supply should be > 0 after delayed seed");
         }
     }
 
@@ -579,17 +579,17 @@ contract ForkUpgradeLockedCurveTest is Test {
     /// @notice Measure actual gas cost of seeding with real positions.
     function testSeedingGasCost() public onlyFork {
         _upgradeProxy();
-        uint256[] memory lockedIds = _findNonTransferablePositions();
-        assertGt(lockedIds.length, 0, "Mainnet must have active non-transferable positions");
+        uint256[] memory nonTransferableIds = _findNonTransferablePositions();
+        assertGt(nonTransferableIds.length, 0, "Mainnet must have active non-transferable positions");
 
         uint256 gasBefore = gasleft();
         vm.prank(GNOSIS_SAFE);
-        veHemi.seedAndFinalizeLockedPositions(lockedIds);
+        veHemi.seedAndFinalizeNonTransferablePositions(nonTransferableIds);
         uint256 gasUsed = gasBefore - gasleft();
 
-        emit log_named_uint("Positions seeded", lockedIds.length);
+        emit log_named_uint("Positions seeded", nonTransferableIds.length);
         emit log_named_uint("Gas used for seeding", gasUsed);
-        emit log_named_uint("Gas per position", gasUsed / lockedIds.length);
+        emit log_named_uint("Gas per position", gasUsed / nonTransferableIds.length);
 
         // Contract comment estimates ~3.9M for 132 positions; allow 2x headroom
         assertLt(gasUsed, 8_000_000, "Seeding gas exceeds 8M safety budget");
@@ -775,8 +775,8 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  17. LOCKED CURVE DECAYS ACROSS SIX_DAYS BOUNDARIES
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Verify locked supply decays monotonically across multiple SIX_DAYS boundary checkpoints.
-    function testLockedCurveDecaysAcrossBoundaries() public onlyFork {
+    /// @notice Verify non-transferable supply decays monotonically across multiple SIX_DAYS boundary checkpoints.
+    function testNonTransferableCurveDecaysAcrossBoundaries() public onlyFork {
         _upgradeAndSeed();
 
         uint256 initialSupply = veHemi.nonTransferableTotalVeHemiSupply();
@@ -788,7 +788,7 @@ contract ForkUpgradeLockedCurveTest is Test {
             veHemi.checkpoint();
 
             uint256 currentSupply = veHemi.nonTransferableTotalVeHemiSupply();
-            assertLe(currentSupply, previousSupply, "locked supply must be monotonically non-increasing");
+            assertLe(currentSupply, previousSupply, "non-transferable supply must be monotonically non-increasing");
             previousSupply = currentSupply;
         }
 
@@ -800,8 +800,8 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  18. HISTORICAL SUPPLY CONSISTENCY
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Record locked supply at t0, warp forward, then query SupplyAt(t0) and verify it matches.
-    function testHistoricalLockedSupplyConsistency() public onlyFork {
+    /// @notice Record non-transferable supply at t0, warp forward, then query SupplyAt(t0) and verify it matches.
+    function testHistoricalNonTransferableSupplyConsistency() public onlyFork {
         _upgradeAndSeed();
 
         uint256 t0 = block.timestamp;
@@ -814,21 +814,21 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Historical query at t0 should return the EXACT original supply
         // (the epoch point at t0 was written during seeding)
         uint256 historicalSupply = veHemi.nonTransferableTotalVeHemiSupplyAt(t0);
-        assertEq(historicalSupply, supply0, "Historical locked supply at t0 should match recorded supply");
+        assertEq(historicalSupply, supply0, "Historical non-transferable supply at t0 should match recorded supply");
     }
 
     // ═════════════════════════════════════════════════════════════════════
     //  19. LOCKED SUPPLY NEVER EXCEEDS TOTAL SUPPLY
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice At multiple time points, assert locked supply <= total supply.
-    function testLockedSupplyNeverExceedsTotal() public onlyFork {
+    /// @notice At multiple time points, assert non-transferable supply <= total supply.
+    function testNonTransferableSupplyNeverExceedsTotal() public onlyFork {
         _upgradeAndSeed();
 
         for (uint256 i; i < 4; ++i) {
-            uint256 lockedSupply = veHemi.nonTransferableTotalVeHemiSupply();
+            uint256 nonTransferableSupply = veHemi.nonTransferableTotalVeHemiSupply();
             uint256 totalSupply = veHemi.totalVeHemiSupply();
-            assertLe(lockedSupply, totalSupply, "locked supply must not exceed total supply");
+            assertLe(nonTransferableSupply, totalSupply, "non-transferable supply must not exceed total supply");
 
             _warpAndRoll(30 days);
             veHemi.checkpoint();
@@ -930,7 +930,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 expected = slope * (bal.end - block.timestamp);
         assertEq(forfeitableSupply, expected, "Forfeitable supply should match new position bias exactly");
 
-        // Locked supply should also include this position
+        // Non-transferable supply should also include this position
         // (it's both non-transferrable AND forfeitable)
         assertGe(veHemi.nonTransferableTotalVeHemiSupply(), forfeitableSupply, "locked >= forfeitable");
     }
@@ -953,7 +953,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(amount, MAX_TIME / 2, recipient, false, true);
         vm.stopPrank();
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
         uint256 totalBefore = veHemi.totalVeHemiSupply();
         uint256 hemiAdminBefore = hemiToken.balanceOf(GNOSIS_SAFE);
@@ -963,11 +963,11 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.forfeit(tokenId);
 
         // All three curves should decrease by the position's bias
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableAfter = veHemi.forfeitableTotalVeHemiSupply();
         uint256 totalAfter = veHemi.totalVeHemiSupply();
 
-        assertLt(lockedAfter, lockedBefore, "Locked should decrease after forfeit");
+        assertLt(nonTransferableSupplyAfter, nonTransferableSupplyBefore, "Non-transferable should decrease after forfeit");
         assertLt(forfeitableAfter, forfeitableBefore, "Forfeitable should decrease after forfeit");
         assertLt(totalAfter, totalBefore, "Total should decrease after forfeit");
 
@@ -993,7 +993,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Snapshot pre-creation state
         uint256 preTotal = veHemi.totalVeHemiSupply();
-        uint256 preLocked = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 preNonTransferable = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
 
         // Create three positions and capture their token IDs
@@ -1005,7 +1005,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 fBias = _computeBias(fTokenId);
 
         // Verify 4-tuple breakdown matches individual deltas exactly
-        _verifyBreakdownDeltas(preTotal, preLocked, preForfeitable, tBias, lBias, fBias);
+        _verifyBreakdownDeltas(preTotal, preNonTransferable, preForfeitable, tBias, lBias, fBias);
 
         // balanceOfNFT verification for each new position
         assertEq(veHemi.balanceOfNFT(tTokenId), tBias, "transferable balanceOfNFT");
@@ -1025,7 +1025,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         t = veHemi.createLock(100 ether, MAX_TIME / 2);
         vm.stopPrank();
 
-        // Create one locked-only position
+        // Create one non-transferable-only position
         deal(HEMI_TOKEN, GNOSIS_SAFE, 350 ether);
         vm.startPrank(GNOSIS_SAFE);
         hemiToken.approve(address(veHemi), 350 ether);
@@ -1036,7 +1036,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
     function _verifyBreakdownDeltas(
         uint256 preTotal,
-        uint256 preLocked,
+        uint256 preNonTransferable,
         uint256 preForfeitable,
         uint256 tBias,
         uint256 lBias,
@@ -1046,12 +1046,12 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // EXACT delta verification (the strongest possible check)
         assertEq(total - preTotal, tBias + lBias + fBias, "Total delta = sum of 3 biases");
-        assertEq(locked - preLocked, lBias + fBias, "Locked delta = locked + forfeitable biases");
+        assertEq(locked - preNonTransferable, lBias + fBias, "Non-transferable delta = non-transferable + forfeitable biases");
         assertEq(forfeitable_ - preForfeitable, fBias, "Forfeitable delta = forfeitable bias");
 
         // Cross-check supplyBreakdown matches individual functions
         assertEq(total, veHemi.totalVeHemiSupply(), "breakdown total");
-        assertEq(locked, veHemi.nonTransferableTotalVeHemiSupply(), "breakdown locked");
+        assertEq(locked, veHemi.nonTransferableTotalVeHemiSupply(), "breakdown non-transferable");
         assertEq(forfeitable_, veHemi.forfeitableTotalVeHemiSupply(), "breakdown forfeitable");
         assertEq(transferable, total - locked, "breakdown transferable");
 
@@ -1078,34 +1078,34 @@ contract ForkUpgradeLockedCurveTest is Test {
     function testViewFunctionsExerciseCatchupLoop() public onlyFork {
         _upgradeAndSeed();
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 totalBefore = veHemi.totalVeHemiSupply();
 
         // Warp 30 days WITHOUT calling checkpoint
         _warpAndRoll(30 days);
 
         // View functions should walk the catchup loop and return decayed values
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 totalAfter = veHemi.totalVeHemiSupply();
         uint256 forfeitableAfter = veHemi.forfeitableTotalVeHemiSupply();
 
         // Decay invariants
-        assertLt(lockedAfter, lockedBefore, "Locked should decay (view catchup loop)");
+        assertLt(nonTransferableSupplyAfter, nonTransferableSupplyBefore, "Non-transferable should decay (view catchup loop)");
         assertLt(totalAfter, totalBefore, "Total should decay (view catchup loop)");
         assertEq(forfeitableAfter, 0, "Forfeitable still 0 (no forfeitable positions on mainnet)");
 
         // Now checkpoint and verify the values match what the view returned
         veHemi.checkpoint();
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), lockedAfter, "Post-checkpoint matches view catchup");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), nonTransferableSupplyAfter, "Post-checkpoint matches view catchup");
         assertEq(veHemi.totalVeHemiSupply(), totalAfter, "Post-checkpoint matches view catchup");
 
         // supplyBreakdown should also work without preceding checkpoint
         // (test by warping again)
         _warpAndRoll(30 days);
-        (uint256 total2, uint256 locked2, uint256 forfeitable2, uint256 transferable2) = veHemi.supplyBreakdown();
-        assertLt(locked2, lockedAfter, "Breakdown locked should decay further");
+        (uint256 total2, uint256 nonTransferable2, uint256 forfeitable2, uint256 transferable2) = veHemi.supplyBreakdown();
+        assertLt(nonTransferable2, nonTransferableSupplyAfter, "Breakdown non-transferable should decay further");
         assertEq(forfeitable2, 0, "Breakdown forfeitable still 0");
-        assertEq(total2, locked2 + transferable2, "Breakdown sums correctly");
+        assertEq(total2, nonTransferable2 + transferable2, "Breakdown sums correctly");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -1176,20 +1176,20 @@ contract ForkUpgradeLockedCurveTest is Test {
     ///         exact agreement with the contract's nonTransferableTotalVeHemiSupply.
     ///         This is the strongest possible correctness check against real mainnet data.
     function testExactShadowAgreementOnMainnetPositions() public onlyFork {
-        uint256[] memory lockedIds = _upgradeAndSeed();
-        assertGt(lockedIds.length, 0, "Mainnet must have active non-transferable positions");
+        uint256[] memory nonTransferableIds = _upgradeAndSeed();
+        assertGt(nonTransferableIds.length, 0, "Mainnet must have active non-transferable positions");
 
         // Independently sum biases for all known non-transferrable positions
-        uint256 expectedLocked;
+        uint256 expectedNonTransferable;
         uint256 expectedForfeitable;
-        for (uint256 i; i < lockedIds.length; ++i) {
-            uint256 tokenId = lockedIds[i];
+        for (uint256 i; i < nonTransferableIds.length; ++i) {
+            uint256 tokenId = nonTransferableIds[i];
             IVeHemi.LockedBalance memory bal = veHemi.getLockedBalance(tokenId);
             if (bal.amount <= 0 || bal.end <= block.timestamp) continue;
 
             uint256 slope = uint256(uint128(bal.amount)) / MAX_TIME;
             uint256 bias = slope * (bal.end - block.timestamp);
-            expectedLocked += bias;
+            expectedNonTransferable += bias;
 
             // Check if this position is forfeitable
             if (veHemi.forfeitable(tokenId)) {
@@ -1198,14 +1198,14 @@ contract ForkUpgradeLockedCurveTest is Test {
         }
 
         // EXACT equality
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), expectedLocked, "Locked exact mismatch");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), expectedNonTransferable, "Non-transferable exact mismatch");
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), expectedForfeitable, "Forfeitable exact mismatch");
 
         // Mainnet currently has zero forfeitable positions
         assertEq(expectedForfeitable, 0, "Mainnet should have zero forfeitable positions");
 
-        emit log_named_uint("Locked positions counted", lockedIds.length);
-        emit log_named_uint("Expected locked supply", expectedLocked);
+        emit log_named_uint("Non-transferable positions counted", nonTransferableIds.length);
+        emit log_named_uint("Expected non-transferable supply", expectedNonTransferable);
         emit log_named_uint("Expected forfeitable supply", expectedForfeitable);
     }
 
@@ -1271,7 +1271,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         deal(HEMI_TOKEN, GNOSIS_SAFE, 300 ether);
         vm.startPrank(GNOSIS_SAFE);
         hemiToken.approve(address(veHemi), 300 ether);
-        veHemi.createLockFor(100 ether, MAX_TIME / 2, address(0x1111), false, false); // locked-only
+        veHemi.createLockFor(100 ether, MAX_TIME / 2, address(0x1111), false, false); // non-transferable-only
         veHemi.createLockFor(100 ether, MAX_TIME / 2, address(0x2222), false, true);  // forfeitable
         vm.stopPrank();
 
@@ -1298,9 +1298,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertLe(locked, total, string.concat(label, ": locked <= total"));
 
         // Cross-check supplyBreakdown matches individual functions
-        (uint256 bdTotal, uint256 bdLocked, uint256 bdForf, uint256 bdTrans) = veHemi.supplyBreakdown();
+        (uint256 bdTotal, uint256 bdNonTransferable, uint256 bdForf, uint256 bdTrans) = veHemi.supplyBreakdown();
         assertEq(bdTotal, total, string.concat(label, ": breakdown total"));
-        assertEq(bdLocked, locked, string.concat(label, ": breakdown locked"));
+        assertEq(bdNonTransferable, locked, string.concat(label, ": breakdown locked"));
         assertEq(bdForf, forfeitable_, string.concat(label, ": breakdown forfeitable"));
         assertEq(bdTrans, total - locked, string.concat(label, ": breakdown transferable"));
     }
@@ -1309,10 +1309,10 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  28. DEPLOY SCRIPT ARRAY VALIDATION (CRITICAL)
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice The deploy script's hardcoded LOCKED_TOKEN_IDS array. MUST match deploy/04_upgrade_vehemi_v2.ts.
+    /// @notice The deploy script's hardcoded NON_TRANSFERABLE_TOKEN_IDS array. MUST match deploy/04_upgrade_vehemi_v2.ts.
     /// @dev If you update the deploy script's array, update this one too. The test below
     ///      enforces that this array matches the on-chain non-transferrable position set.
-    function _deployScriptLockedTokenIds() internal pure returns (uint256[] memory) {
+    function _deployScriptNonTransferableTokenIds() internal pure returns (uint256[] memory) {
         uint256[] memory ids = new uint256[](126);
         uint256 idx;
         // Block 1: 28660-28669
@@ -1349,10 +1349,10 @@ contract ForkUpgradeLockedCurveTest is Test {
         return ids;
     }
 
-    /// @notice CRITICAL: Verify the deploy script's hardcoded LOCKED_TOKEN_IDS array
+    /// @notice CRITICAL: Verify the deploy script's hardcoded NON_TRANSFERABLE_TOKEN_IDS array
     ///         matches the actual on-chain non-transferrable position set.
     function testDeployScriptArrayMatchesOnChainState() public onlyFork {
-        uint256[] memory deployIds = _deployScriptLockedTokenIds();
+        uint256[] memory deployIds = _deployScriptNonTransferableTokenIds();
         uint256[] memory scannedIds = _findNonTransferablePositions();
 
         // First, verify lengths match
@@ -1386,8 +1386,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         _upgradeProxy();
         uint256[] memory scannedIds = _findNonTransferablePositions();
         vm.prank(GNOSIS_SAFE);
-        veHemi.seedAndFinalizeLockedPositions(scannedIds);
-        uint256 lockedFromScan = veHemi.nonTransferableTotalVeHemiSupply();
+        veHemi.seedAndFinalizeNonTransferablePositions(scannedIds);
+        uint256 nonTransferableFromScan = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableFromScan = veHemi.forfeitableTotalVeHemiSupply();
 
         // Restore snapshot
@@ -1395,14 +1395,14 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Path 2: Seed with deploy script array
         _upgradeProxy();
-        uint256[] memory deployIds = _deployScriptLockedTokenIds();
+        uint256[] memory deployIds = _deployScriptNonTransferableTokenIds();
         vm.prank(GNOSIS_SAFE);
-        veHemi.seedAndFinalizeLockedPositions(deployIds);
-        uint256 lockedFromDeploy = veHemi.nonTransferableTotalVeHemiSupply();
+        veHemi.seedAndFinalizeNonTransferablePositions(deployIds);
+        uint256 nonTransferableFromDeploy = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableFromDeploy = veHemi.forfeitableTotalVeHemiSupply();
 
         // Both seedings must produce identical results
-        assertEq(lockedFromScan, lockedFromDeploy, "Locked supply differs between scan and deploy");
+        assertEq(nonTransferableFromScan, nonTransferableFromDeploy, "Non-transferable supply differs between scan and deploy");
         assertEq(forfeitableFromScan, forfeitableFromDeploy, "Forfeitable supply differs between scan and deploy");
     }
 
@@ -1415,10 +1415,10 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256[] memory empty = new uint256[](0);
         vm.prank(GNOSIS_SAFE);
         vm.expectRevert(VeHemi.EmptyArray.selector);
-        veHemi.seedAndFinalizeLockedPositions(empty);
+        veHemi.seedAndFinalizeNonTransferablePositions(empty);
         // Verify state is clean — seeding NOT finalized
-        assertFalse(veHemi.lockedSeedingFinalized(), "Seeding should not be finalized after revert");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "No locked supply");
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "Seeding should not be finalized after revert");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), 0, "No non-transferable supply");
     }
 
     function testSeedingRevertsOnUnsortedIds() public onlyFork {
@@ -1429,8 +1429,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         unsorted[2] = 28670;
         vm.prank(GNOSIS_SAFE);
         vm.expectRevert(VeHemi.UnsortedOrDuplicateTokenIds.selector);
-        veHemi.seedAndFinalizeLockedPositions(unsorted);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
+        veHemi.seedAndFinalizeNonTransferablePositions(unsorted);
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "Should not be finalized");
     }
 
     function testSeedingRevertsOnDuplicateIds() public onlyFork {
@@ -1441,8 +1441,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         dup[2] = 28665; // duplicate
         vm.prank(GNOSIS_SAFE);
         vm.expectRevert(VeHemi.UnsortedOrDuplicateTokenIds.selector);
-        veHemi.seedAndFinalizeLockedPositions(dup);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
+        veHemi.seedAndFinalizeNonTransferablePositions(dup);
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "Should not be finalized");
     }
 
     function testSeedingRevertsOnTransferableTokenInArray() public onlyFork {
@@ -1454,8 +1454,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         mixed[1] = 28660; // non-transferable
         vm.prank(GNOSIS_SAFE);
         vm.expectRevert(VeHemi.NotNonTransferrable.selector);
-        veHemi.seedAndFinalizeLockedPositions(mixed);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
+        veHemi.seedAndFinalizeNonTransferablePositions(mixed);
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "Should not be finalized");
     }
 
     function testSeedingRevertsOnNonexistentToken() public onlyFork {
@@ -1464,18 +1464,18 @@ contract ForkUpgradeLockedCurveTest is Test {
         bad[0] = type(uint256).max - 1; // definitely doesn't exist
         vm.prank(GNOSIS_SAFE);
         vm.expectRevert(VeHemi.TokenDoesNotExist.selector);
-        veHemi.seedAndFinalizeLockedPositions(bad);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
+        veHemi.seedAndFinalizeNonTransferablePositions(bad);
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "Should not be finalized");
     }
 
     function testSeedingRevertsOnNonOwner() public onlyFork {
         _upgradeProxy();
-        uint256[] memory ids = _deployScriptLockedTokenIds();
+        uint256[] memory ids = _deployScriptNonTransferableTokenIds();
         // Call from a random non-owner address
         vm.prank(address(0xBAD));
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", address(0xBAD)));
-        veHemi.seedAndFinalizeLockedPositions(ids);
-        assertFalse(veHemi.lockedSeedingFinalized(), "Should not be finalized");
+        veHemi.seedAndFinalizeNonTransferablePositions(ids);
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "Should not be finalized");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -1494,7 +1494,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(100 ether, MAX_TIME / 2, user, false, true);
         vm.stopPrank();
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
 
         // increaseAmount must be called by token owner
@@ -1508,13 +1508,13 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 newBias = _computeBias(tokenId);
         uint256 oldBias = forfeitableBefore; // since this was the only forfeitable position before this op (and at same timestamp)
 
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableAfter = veHemi.forfeitableTotalVeHemiSupply();
 
         // Both curves should increase by the same delta (the new position is in both)
-        uint256 lockedDelta = lockedAfter - lockedBefore;
+        uint256 nonTransferableDelta = nonTransferableSupplyAfter - nonTransferableSupplyBefore;
         uint256 forfeitableDelta = forfeitableAfter - forfeitableBefore;
-        assertEq(lockedDelta, forfeitableDelta, "Locked delta == forfeitable delta for forfeitable position");
+        assertEq(nonTransferableDelta, forfeitableDelta, "Non-transferable delta == forfeitable delta for forfeitable position");
 
         // The new total forfeitable supply should equal the new bias of this single position
         // (since it was the only forfeitable position created at this timestamp)
@@ -1712,13 +1712,13 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  35. NEW LOCKED-ONLY POSITION DOES NOT AFFECT FORFEITABLE CURVE
     // ═════════════════════════════════════════════════════════════════════
 
-    function testNewLockedOnlyDoesNotAffectForfeitableCurve() public onlyFork {
+    function testNewNonTransferableOnlyDoesNotAffectForfeitableCurve() public onlyFork {
         _upgradeAndSeed();
 
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
 
-        // Create a new locked-only (non-forfeitable) position
+        // Create a new non-transferable-only (non-forfeitable) position
         address user = address(0xCAFE);
         deal(HEMI_TOKEN, GNOSIS_SAFE, 100 ether);
         vm.startPrank(GNOSIS_SAFE);
@@ -1728,18 +1728,18 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         uint256 expectedBias = _computeBias(tokenId);
 
-        // Locked should increase by exactly the bias
+        // Non-transferable should increase by exactly the bias
         assertEq(
-            veHemi.nonTransferableTotalVeHemiSupply() - lockedBefore,
+            veHemi.nonTransferableTotalVeHemiSupply() - nonTransferableSupplyBefore,
             expectedBias,
-            "Locked should increase by new position bias"
+            "Non-transferable should increase by new position bias"
         );
 
         // Forfeitable must NOT change
         assertEq(
             veHemi.forfeitableTotalVeHemiSupply(),
             forfeitableBefore,
-            "Forfeitable must not change when locked-only position is created"
+            "Forfeitable must not change when non-transferable-only position is created"
         );
     }
 
@@ -1791,7 +1791,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = ids[0];
         address realOwner = veHemi.ownerOf(tokenId);
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 totalBefore = veHemi.totalVeHemiSupply();
 
         // Real owner increases their amount
@@ -1801,8 +1801,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.increaseAmount(tokenId, 50 ether);
         vm.stopPrank();
 
-        // Locked supply should increase (this is a non-transferrable position)
-        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), lockedBefore, "Locked should increase");
+        // Non-transferable supply should increase (this is a non-transferrable position)
+        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), nonTransferableSupplyBefore, "Non-transferable should increase");
         assertGt(veHemi.totalVeHemiSupply(), totalBefore, "Total should increase");
 
         // Token conservation
@@ -1877,9 +1877,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(latestPoint.timestamp, block.timestamp, "Latest epoch should be at current timestamp");
 
         // The single epoch entry should reflect BOTH positions
-        uint256 expectedLocked = _computeBias(tokenId1) + _computeBias(tokenId2);
-        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "Locked should be non-zero");
-        // The new locked supply should include both positions' biases
+        uint256 expectedNonTransferable = _computeBias(tokenId1) + _computeBias(tokenId2);
+        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "Non-transferable should be non-zero");
+        // The new non-transferable supply should include both positions' biases
         // (we can't directly compare to the pre-state because of decay, but we can verify
         // the new positions are tracked exactly)
         uint256 expectedForfeitable = _computeBias(tokenId2);
@@ -1977,11 +1977,11 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  40. EXACT MULTI-BOUNDARY LOCKED CURVE DECAY VERIFICATION
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Verify the locked curve matches per-position shadow sum across multiple
+    /// @notice Verify the non-transferable curve matches per-position shadow sum across multiple
     ///         time warps including SIX_DAYS boundary crossings. This is the strongest
     ///         possible math verification — it computes expected supply from real on-chain
     ///         positions independently and asserts exact equality at each step.
-    function testExactLockedCurveDecayAtMultipleTimestamps() public onlyFork {
+    function testExactNonTransferableCurveDecayAtMultipleTimestamps() public onlyFork {
         uint256[] memory ids = _upgradeAndSeed();
         assertGt(ids.length, 0, "Mainnet must have active non-transferable positions");
 
@@ -2011,18 +2011,18 @@ contract ForkUpgradeLockedCurveTest is Test {
             veHemi.checkpoint();
 
             // Compute expected supply: sum of slope * max(0, end - now) for each position
-            uint256 expectedLocked;
+            uint256 expectedNonTransferable;
             for (uint256 i; i < ids.length; i++) {
                 if (ends[i] > block.timestamp) {
-                    expectedLocked += slopes[i] * (ends[i] - block.timestamp);
+                    expectedNonTransferable += slopes[i] * (ends[i] - block.timestamp);
                 }
             }
 
             // Verify EXACT equality
             assertEq(
                 veHemi.nonTransferableTotalVeHemiSupply(),
-                expectedLocked,
-                string.concat("Locked supply mismatch at day ", vm.toString(warpDays[w]))
+                expectedNonTransferable,
+                string.concat("Non-transferable supply mismatch at day ", vm.toString(warpDays[w]))
             );
         }
     }
@@ -2080,7 +2080,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(100 ether, MAX_TIME / 2, address(0xCAFE), false, true);
         vm.stopPrank();
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
 
         // A DIFFERENT address (not the owner) increases the amount
@@ -2092,10 +2092,10 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.stopPrank();
 
         // Both curves should increase
-        uint256 lockedDelta = veHemi.nonTransferableTotalVeHemiSupply() - lockedBefore;
+        uint256 nonTransferableDelta = veHemi.nonTransferableTotalVeHemiSupply() - nonTransferableSupplyBefore;
         uint256 forfeitableDelta = veHemi.forfeitableTotalVeHemiSupply() - forfeitableBefore;
-        assertGt(lockedDelta, 0, "Locked should increase");
-        assertEq(lockedDelta, forfeitableDelta, "Locked and forfeitable deltas should be equal");
+        assertGt(nonTransferableDelta, 0, "Non-transferable should increase");
+        assertEq(nonTransferableDelta, forfeitableDelta, "Non-transferable and forfeitable deltas should be equal");
 
         // Token conservation
         assertEq(hemiToken.balanceOf(address(veHemi)), veHemi.totalLocked(), "Token conservation");
@@ -2124,20 +2124,20 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  44. LOCKED-ONLY POSITION WITHDRAW AFTER NATURAL EXPIRY
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Create a non-forfeitable locked position, let it expire, withdraw.
-    ///         Verify the locked curve decreases correctly, transferableAfter is cleaned up,
+    /// @notice Create a non-forfeitable non-transferable position, let it expire, withdraw.
+    ///         Verify the non-transferable curve decreases correctly, transferableAfter is cleaned up,
     ///         and forfeitable curve is unaffected.
-    function testLockedOnlyWithdrawAfterExpiry() public onlyFork {
+    function testNonTransferableOnlyWithdrawAfterExpiry() public onlyFork {
         _upgradeAndSeed();
 
-        // Create a locked-only (non-forfeitable) position with short duration
+        // Create a non-transferable-only (non-forfeitable) position with short duration
         deal(HEMI_TOKEN, GNOSIS_SAFE, 100 ether);
         vm.startPrank(GNOSIS_SAFE);
         hemiToken.approve(address(veHemi), 100 ether);
         uint256 tokenId = veHemi.createLockFor(100 ether, 2 * SIX_DAYS, address(0xBEEF), false, false);
         vm.stopPrank();
 
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
 
         // Verify position is non-forfeitable
@@ -2153,9 +2153,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.prank(address(0xBEEF));
         veHemi.withdraw(tokenId);
 
-        // Locked curve should have decreased (the position's contribution was shed at expiry)
-        uint256 lockedAfter = veHemi.nonTransferableTotalVeHemiSupply();
-        assertLe(lockedAfter, lockedBefore, "Locked should not exceed pre-creation value");
+        // Non-transferable curve should have decreased (the position's contribution was shed at expiry)
+        uint256 nonTransferableSupplyAfter = veHemi.nonTransferableTotalVeHemiSupply();
+        assertLe(nonTransferableSupplyAfter, nonTransferableSupplyBefore, "Non-transferable should not exceed pre-creation value");
 
         // Forfeitable curve should be completely unaffected
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), forfeitableBefore, "Forfeitable unchanged");
@@ -2172,10 +2172,10 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  45. INTERLEAVED FORFEITABLE + LOCKED-ONLY LIFECYCLE
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Create forfeitable and locked-only positions interleaved with time warps,
-    ///         then forfeit the forfeitable position. Verify the locked curve correctly
-    ///         reflects only the remaining locked-only position.
-    function testInterleavedForfeitableAndLockedOnlyLifecycle() public onlyFork {
+    /// @notice Create forfeitable and non-transferable-only positions interleaved with time warps,
+    ///         then forfeit the forfeitable position. Verify the non-transferable curve correctly
+    ///         reflects only the remaining non-transferable-only position.
+    function testInterleavedForfeitableAndNonTransferableOnlyLifecycle() public onlyFork {
         _upgradeAndSeed();
         vm.prank(GNOSIS_SAFE);
         veHemi.updateForfeitAdmin(GNOSIS_SAFE);
@@ -2193,14 +2193,14 @@ contract ForkUpgradeLockedCurveTest is Test {
         _warpAndRoll(30 days);
         veHemi.checkpoint();
 
-        // Create a locked-only position (different epoch than the forfeitable one)
+        // Create a non-transferable-only position (different epoch than the forfeitable one)
         deal(HEMI_TOKEN, GNOSIS_SAFE, 200 ether);
         vm.startPrank(GNOSIS_SAFE);
         hemiToken.approve(address(veHemi), 200 ether);
-        uint256 lockedOnlyId = veHemi.createLockFor(200 ether, MAX_TIME / 2, address(0xBBBB), false, false);
+        uint256 nonTransferableOnlyId = veHemi.createLockFor(200 ether, MAX_TIME / 2, address(0xBBBB), false, false);
         vm.stopPrank();
 
-        uint256 lockedOnlyBias = _computeBias(lockedOnlyId);
+        uint256 nonTransferableOnlyBias = _computeBias(nonTransferableOnlyId);
         uint256 forfeitableBiasT1 = _computeBias(forfeitableId);
 
         // Verify both tracked correctly
@@ -2208,9 +2208,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 forfeitable_ = veHemi.forfeitableTotalVeHemiSupply();
 
         // Locked includes both; forfeitable includes only the forfeitable one
-        // (The pre-existing mainnet locked positions also contribute, so use delta)
+        // (The pre-existing mainnet non-transferable positions also contribute, so use delta)
         assertGt(forfeitable_, 0, "Forfeitable should be positive");
-        assertGt(locked, forfeitable_, "Locked should exceed forfeitable");
+        assertGt(locked, forfeitable_, "Non-transferable should exceed forfeitable");
 
         // Warp another 30 days
         _warpAndRoll(30 days);
@@ -2223,13 +2223,13 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Forfeitable should drop to 0 (it was the only one)
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable 0 after forfeit");
 
-        // Locked should still include the locked-only position
-        uint256 lockedAfterForfeit = veHemi.nonTransferableTotalVeHemiSupply();
-        assertGt(lockedAfterForfeit, 0, "Locked-only position should remain");
+        // Non-transferable should still include the non-transferable-only position
+        uint256 nonTransferableAfterForfeit = veHemi.nonTransferableTotalVeHemiSupply();
+        assertGt(nonTransferableAfterForfeit, 0, "Non-transferable-only position should remain");
 
-        // The locked-only position's bias should still be computable
-        uint256 remainingLockedBias = _computeBias(lockedOnlyId);
-        assertGt(remainingLockedBias, 0, "Locked-only should still have bias");
+        // The non-transferable-only position's bias should still be computable
+        uint256 remainingNonTransferableBias = _computeBias(nonTransferableOnlyId);
+        assertGt(remainingNonTransferableBias, 0, "Non-transferable-only should still have bias");
 
         _assertOrdering("After interleaved lifecycle");
         assertEq(hemiToken.balanceOf(address(veHemi)), veHemi.totalLocked(), "Token conservation");
@@ -2240,7 +2240,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Include an expired non-transferrable position in the seed array.
-    ///         The contract should silently skip it (no revert), and the locked supply
+    ///         The contract should silently skip it (no revert), and the non-transferable supply
     ///         should only reflect active positions.
     function testSeedingWithExpiredPositionInArray() public onlyFork {
         _upgradeProxy();
@@ -2280,11 +2280,11 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Seed should succeed (expired position is silently skipped)
         vm.prank(GNOSIS_SAFE);
-        veHemi.seedAndFinalizeLockedPositions(idsWithExpired);
+        veHemi.seedAndFinalizeNonTransferablePositions(idsWithExpired);
 
-        assertTrue(veHemi.lockedSeedingFinalized(), "Should be finalized");
+        assertTrue(veHemi.nonTransferableSeedingFinalized(), "Should be finalized");
 
-        // Locked supply should match what the scanner found (excludes expired)
+        // Non-transferable supply should match what the scanner found (excludes expired)
         // Compute expected from scanned IDs only
         uint256 expected;
         for (uint256 i; i < scannedIds.length; i++) {
@@ -2298,27 +2298,27 @@ contract ForkUpgradeLockedCurveTest is Test {
     // ═════════════════════════════════════════════════════════════════════
 
     /// @notice Closes mutation testing gap M2: increaseAmount/increaseUnlockTime on a
-    ///         locked-only (non-forfeitable) position must NOT write to forfeitableSlopeChanges.
+    ///         non-transferable-only (non-forfeitable) position must NOT write to forfeitableSlopeChanges.
     ///         Verified by warping past the position's end and checking the forfeitable curve
     ///         is still exactly 0.
-    function testLockedOnlyMutationDoesNotCorruptForfeitableCurve() public onlyFork {
+    function testNonTransferableOnlyMutationDoesNotCorruptForfeitableCurve() public onlyFork {
         _upgradeAndSeed();
 
-        // Create a locked-only position with short duration so we can warp past its end
+        // Create a non-transferable-only position with short duration so we can warp past its end
         deal(HEMI_TOKEN, GNOSIS_SAFE, 200 ether);
         vm.startPrank(GNOSIS_SAFE);
         hemiToken.approve(address(veHemi), 200 ether);
         uint256 tokenId = veHemi.createLockFor(100 ether, MAX_TIME / 4, address(0xBBBB), false, false);
         vm.stopPrank();
 
-        // Verify it's locked-only (non-forfeitable)
+        // Verify it's non-transferable-only (non-forfeitable)
         assertGt(veHemi.transferableAfter(tokenId), 0, "Should be non-transferrable");
         assertFalse(veHemi.forfeitable(tokenId), "Should NOT be forfeitable");
 
         // Forfeitable curve should be 0 (no forfeitable positions exist)
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable should be 0 before mutation");
 
-        // increaseAmount on the locked-only position (triggers _scheduleSlopeChanges with curveFlags=1)
+        // increaseAmount on the non-transferable-only position (triggers _scheduleSlopeChanges with curveFlags=1)
         vm.startPrank(GNOSIS_SAFE);
         veHemi.increaseAmount(tokenId, 100 ether);
         vm.stopPrank();
@@ -2326,7 +2326,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Forfeitable should still be 0 immediately
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable should be 0 after increaseAmount");
 
-        // increaseUnlockTime on the locked-only position (triggers _scheduleSlopeChanges with curveFlags=1)
+        // increaseUnlockTime on the non-transferable-only position (triggers _scheduleSlopeChanges with curveFlags=1)
         uint256 oldEnd = veHemi.getLockedBalance(tokenId).end;
         vm.prank(address(0xBBBB));
         veHemi.increaseUnlockTime(tokenId, MAX_TIME / 2);
@@ -2349,7 +2349,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable should be 0 after crossing end boundary");
 
         // Token conservation
-        _assertTokenConservation("After locked-only mutation lifecycle");
+        _assertTokenConservation("After non-transferable-only mutation lifecycle");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -2631,7 +2631,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // BEFORE transition: position is in subcurves
         assertGt(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable should be positive before transition");
-        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "Locked should be positive before transition");
+        assertGt(veHemi.nonTransferableTotalVeHemiSupply(), 0, "Non-transferable should be positive before transition");
         assertFalse(veHemi.isTransferable(tokenId), "Should not be transferable yet");
 
         // Warp to EXACTLY transferableAfter
@@ -2642,7 +2642,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // AT the boundary: position should have exited subcurves AND be transferable
         assertTrue(veHemi.isTransferable(tokenId), "Should be transferable at exact boundary");
         // Subcurves should be empty (only this one non-transferable position existed post-seed)
-        // Note: mainnet seeded positions contribute to locked supply, so check forfeitable only
+        // Note: mainnet seeded positions contribute to non-transferable supply, so check forfeitable only
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), 0, "Forfeitable should be 0 at boundary");
 
         // Forfeit should revert
@@ -2689,7 +2689,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.checkpoint();
 
         uint256 forfeitableBefore = veHemi.forfeitableTotalVeHemiSupply();
-        uint256 lockedBefore = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 nonTransferableSupplyBefore = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 totalBefore = veHemi.totalVeHemiSupply();
 
         // increaseAmount AFTER transition — subcurves should NOT change
@@ -2700,7 +2700,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.stopPrank();
 
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), forfeitableBefore, "Forfeitable unchanged after post-transition increaseAmount");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), lockedBefore, "Locked unchanged after post-transition increaseAmount");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), nonTransferableSupplyBefore, "Locked unchanged after post-transition increaseAmount");
         assertGt(veHemi.totalVeHemiSupply(), totalBefore, "Global should increase from increaseAmount");
 
         // increaseUnlockTime AFTER transition — subcurves should NOT change
@@ -2709,7 +2709,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.increaseUnlockTime(tokenId, MAX_TIME);
 
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), forfeitableBefore, "Forfeitable unchanged after post-transition increaseUnlockTime");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), lockedBefore, "Locked unchanged after post-transition increaseUnlockTime");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), nonTransferableSupplyBefore, "Locked unchanged after post-transition increaseUnlockTime");
         assertGt(veHemi.totalVeHemiSupply(), totalAfterIncrease, "Global should increase from increaseUnlockTime");
 
         _assertTokenConservation("After post-transition operations");
@@ -2803,7 +2803,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 ta;
         uint256 newEnd;
         uint256 slope;
-        uint256 seedLockedAtFuture;
+        uint256 seedNonTransferableAtFuture;
         uint256 seedForfeitableAtFuture;
         uint256 seedTotalAtFuture;
         uint256 expectedPositionBias;
@@ -2823,7 +2823,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         Test55Snapshot memory s;
         s.ta = veHemi.transferableAfter(tokenId);
-        // Verify totalLocked delta on create (R9)
+        // Verify totalNon-transferable delta on create (R9)
         assertEq(veHemi.totalLocked(), preTotalLocked + 100 ether, "totalLocked +100 on create");
 
         vm.prank(address(0xAAAA));
@@ -2833,7 +2833,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Capture seed-projected baselines at the future timestamp BEFORE warping
         uint256 futureTime = s.ta + 1;
-        s.seedLockedAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
+        s.seedNonTransferableAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
         s.seedForfeitableAtFuture = veHemi.forfeitableTotalVeHemiSupplyAt(futureTime);
         s.seedTotalAtFuture = veHemi.totalVeHemiSupplyAt(futureTime);
 
@@ -2858,7 +2858,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            s.seedLockedAtFuture,
+            s.seedNonTransferableAtFuture,
             "Locked = seed-projection at futureTime"
         );
         // Independent shadow for OUR position's bias
@@ -2893,7 +2893,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Supply unchanged — block.timestamp is the same so seed values match
         assertEq(veHemi.totalVeHemiSupply(), s.seedTotalAtFuture, "Global unchanged after transfer");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), s.seedLockedAtFuture, "Locked unchanged");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), s.seedNonTransferableAtFuture, "Locked unchanged");
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), s.seedForfeitableAtFuture, "Forfeitable unchanged");
         assertEq(veHemi.balanceOfNFT(tokenId), s.expectedPositionBias, "Position bias unchanged");
 
@@ -2951,7 +2951,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Snapshot pre-create supply for delta verification
         uint256 preTotal = veHemi.totalVeHemiSupply();
-        uint256 preLocked = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 preNonTransferable = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
         uint256 preTotalLocked = veHemi.totalLocked();
 
@@ -2979,9 +2979,9 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Forfeitable delta = slope*(TA-t0) at creation"
         );
         assertEq(
-            veHemi.nonTransferableTotalVeHemiSupply() - preLocked,
+            veHemi.nonTransferableTotalVeHemiSupply() - preNonTransferable,
             expectedForfCreate,
-            "Locked delta matches forfeitable at creation"
+            "Non-transferable delta matches forfeitable at creation"
         );
         assertEq(veHemi.totalLocked() - preTotalLocked, 100 ether, "totalLocked +100 HEMI");
         assertEq(veHemi.provider(tokenId), GNOSIS_SAFE, "provider = creator");
@@ -3001,9 +3001,9 @@ contract ForkUpgradeLockedCurveTest is Test {
             expectedForfCreate,
             "Forfeitable unchanged after extension"
         );
-        // Locked-only subcurve also unchanged (bounded by TA)
+        // Non-transferable-only subcurve also unchanged (bounded by TA)
         assertEq(
-            veHemi.nonTransferableTotalVeHemiSupply() - preLocked,
+            veHemi.nonTransferableTotalVeHemiSupply() - preNonTransferable,
             expectedForfCreate,
             "Locked unchanged after extension (bounded by TA)"
         );
@@ -3017,7 +3017,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Phase 1: Warp past TA — subcurve exit
         // Capture future seed-only baselines BEFORE warping (mainnet positions decay over time)
         uint256 phase1Time = ta + 1;
-        uint256 seedLockedAtPhase1 = veHemi.nonTransferableTotalVeHemiSupplyAt(phase1Time);
+        uint256 seedNonTransferableAtPhase1 = veHemi.nonTransferableTotalVeHemiSupplyAt(phase1Time);
         uint256 seedForfeitableAtPhase1 = veHemi.forfeitableTotalVeHemiSupplyAt(phase1Time);
         uint256 seedTotalAtPhase1 = veHemi.totalVeHemiSupplyAt(phase1Time);
         // Subtract this position's contribution at phase1Time from seed baseline.
@@ -3037,7 +3037,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            seedLockedAtPhase1,
+            seedNonTransferableAtPhase1,
             "Locked matches seed-only at phase1"
         );
         // Global = seed (which already includes our position's projected contribution at phase1Time)
@@ -3101,16 +3101,16 @@ contract ForkUpgradeLockedCurveTest is Test {
     //  57. EXTENSION SUPPLY SEMANTICS FOR LOCKED-ONLY (MEDIUM GAP #3)
     // ═════════════════════════════════════════════════════════════════════
 
-    /// @notice Verify that extending a locked-only position increases global but does NOT
-    ///         change locked supply (subcurve bounded by transferableAfter = original end).
+    /// @notice Verify that extending a non-transferable-only position increases global but does NOT
+    ///         change non-transferable supply (subcurve bounded by transferableAfter = original end).
     ///         All assertions use INDEPENDENT slope = amount/MAX_TIME and EXACT slope-change
     ///         values (not qualitative `< 0` checks).
-    function testExtensionLockedOnlySubcurveBounded() public onlyFork {
+    function testExtensionNonTransferableOnlySubcurveBounded() public onlyFork {
         _upgradeAndSeed();
 
         // Snapshot
         uint256 preTotal = veHemi.totalVeHemiSupply();
-        uint256 preLocked = veHemi.nonTransferableTotalVeHemiSupply();
+        uint256 preNonTransferable = veHemi.nonTransferableTotalVeHemiSupply();
         uint256 preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
         uint256 preTotalLocked = veHemi.totalLocked();
 
@@ -3120,38 +3120,38 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(100 ether, MAX_TIME / 4, address(0xAAAA), false, false);
         vm.stopPrank();
 
-        // R9: totalLocked delta on create
+        // R9: totalNon-transferable delta on create
         assertEq(veHemi.totalLocked(), preTotalLocked + 100 ether, "totalLocked +100 on create");
 
         uint256 t0 = block.timestamp;
         uint256 ta = veHemi.transferableAfter(tokenId);
         uint256 slope = uint256(100 ether) / MAX_TIME;
         int128 expectedSlopeChange = -int128(int256(slope));
-        uint256 expectedLockedAtCreate = slope * (ta - t0);
+        uint256 expectedNonTransferableAtCreate = slope * (ta - t0);
 
         // Verify creation deltas
         assertEq(
-            veHemi.nonTransferableTotalVeHemiSupply() - preLocked,
-            expectedLockedAtCreate,
-            "Locked delta = slope*(TA-t0) at creation"
+            veHemi.nonTransferableTotalVeHemiSupply() - preNonTransferable,
+            expectedNonTransferableAtCreate,
+            "Non-transferable delta = slope*(TA-t0) at creation"
         );
-        // Locked-only — no forfeitable contribution
+        // Non-transferable-only — no forfeitable contribution
         assertEq(
             veHemi.forfeitableTotalVeHemiSupply(),
             preForfeitable,
-            "Forfeitable unchanged (locked-only)"
+            "Forfeitable unchanged (non-transferable-only)"
         );
-        // Forfeitable slope change at TA: 0 (locked-only position never enters forfeitable curve)
+        // Forfeitable slope change at TA: 0 (non-transferable-only position never enters forfeitable curve)
         assertEq(
             veHemi.forfeitableSlopeChanges(ta),
             int128(0),
-            "forfeitableSlopeChanges[TA] = 0 (locked-only)"
+            "forfeitableSlopeChanges[TA] = 0 (non-transferable-only)"
         );
-        // Locked slope change at TA: -slope (R6-M5 quantitative)
+        // Non-transferable slope change at TA: -slope (R6-M5 quantitative)
         assertEq(
-            veHemi.lockedSlopeChanges(ta),
+            veHemi.nonTransferableSlopeChanges(ta),
             expectedSlopeChange,
-            "lockedSlopeChanges[TA] = -slope at creation"
+            "nonTransferableSlopeChanges[TA] = -slope at creation"
         );
 
         // Extend to MAX_TIME / 2
@@ -3168,8 +3168,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
         // Locked UNCHANGED (subcurve bounded by TA = original end)
         assertEq(
-            veHemi.nonTransferableTotalVeHemiSupply() - preLocked,
-            expectedLockedAtCreate,
+            veHemi.nonTransferableTotalVeHemiSupply() - preNonTransferable,
+            expectedNonTransferableAtCreate,
             "Locked unchanged (bounded by TA)"
         );
         // Forfeitable still unchanged
@@ -3181,17 +3181,17 @@ contract ForkUpgradeLockedCurveTest is Test {
         // transferableAfter stayed the same
         assertEq(veHemi.transferableAfter(tokenId), ta, "TA should not change");
 
-        // Locked slope change at TA UNCHANGED (R6-M5 + R8-M1 exact value)
+        // Non-transferable slope change at TA UNCHANGED (R6-M5 + R8-M1 exact value)
         assertEq(
-            veHemi.lockedSlopeChanges(ta),
+            veHemi.nonTransferableSlopeChanges(ta),
             expectedSlopeChange,
-            "lockedSlopeChanges[TA] = -slope unchanged after extension"
+            "nonTransferableSlopeChanges[TA] = -slope unchanged after extension"
         );
-        // No locked slope change at new end
+        // No non-transferable slope change at new end
         assertEq(
-            veHemi.lockedSlopeChanges(newEnd),
+            veHemi.nonTransferableSlopeChanges(newEnd),
             int128(0),
-            "No lockedSlopeChanges at newEnd"
+            "No nonTransferableSlopeChanges at newEnd"
         );
 
         // R6-M2: Global slope change cancellation pattern.
@@ -3211,7 +3211,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Phase: warp past TA — locked drops to seed-only at the projected timestamp
         // (mainnet seed positions decay over time, so we read the at-timestamp baseline)
         uint256 futureTime = ta + 1;
-        uint256 seedLockedAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
+        uint256 seedNonTransferableAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
         uint256 seedTotalAtFuture = veHemi.totalVeHemiSupplyAt(futureTime);
 
         _warpAndRoll(futureTime - block.timestamp);
@@ -3220,7 +3220,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Locked drops to seed-only (the *At call already projects through our slope change)
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            seedLockedAtFuture,
+            seedNonTransferableAtFuture,
             "Locked = seed-only projection after TA"
         );
         // Global = seed-projection (which already includes our position contributing
@@ -3237,8 +3237,8 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Position bias = slope*(newEnd-now) post-TA"
         );
 
-        _assertOrdering("After locked-only extension");
-        _assertTokenConservation("After locked-only extension");
+        _assertOrdering("After non-transferable-only extension");
+        _assertTokenConservation("After non-transferable-only extension");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -3247,7 +3247,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
     struct Test58Snapshot {
         uint256 preTotal;
-        uint256 preLocked;
+        uint256 preNonTransferable;
         uint256 preForfeitable;
         uint256 t0;
         uint256 ta;
@@ -3261,7 +3261,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     ///         - Subcurve bias = slope * (TA - frozenTimestamp) where frozenTimestamp
     ///           is captured ONCE before any contract calls and never re-read.
     ///         - Global bias = slope * (lock.end - frozenTimestamp).
-    ///         - lockedSlopeChanges[TA] is verified as exact int128 quantitative value.
+    ///         - nonTransferableSlopeChanges[TA] is verified as exact int128 quantitative value.
     ///         - Old global slopeChanges[oldEnd] are verified to be cancelled to 0 after
     ///           extension supersedes them.
     ///         - Final phase: warp past TA to verify forfeitable drops to exactly 0,
@@ -3271,7 +3271,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         Test58Snapshot memory snap;
         snap.preTotal = veHemi.totalVeHemiSupply();
-        snap.preLocked = veHemi.nonTransferableTotalVeHemiSupply();
+        snap.preNonTransferable = veHemi.nonTransferableTotalVeHemiSupply();
         snap.preForfeitable = veHemi.forfeitableTotalVeHemiSupply();
         uint256 preTotalLocked58 = veHemi.totalLocked();
 
@@ -3285,7 +3285,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(100 ether, MAX_TIME / 4, address(0xAAAA), false, true);
         vm.stopPrank();
 
-        // R9: totalLocked delta on create
+        // R9: totalNon-transferable delta on create
         assertEq(veHemi.totalLocked(), preTotalLocked58 + 100 ether, "totalLocked +100 on create");
 
         // Capture timestamp ONCE (R6-H4) — every expected value below uses this exact value.
@@ -3318,9 +3318,9 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Forfeitable delta matches independent slope*(TA-t0)"
         );
         assertEq(
-            veHemi.nonTransferableTotalVeHemiSupply() - snap.preLocked,
+            veHemi.nonTransferableTotalVeHemiSupply() - snap.preNonTransferable,
             expectedForfCreate,
-            "Locked delta matches forfeitable at creation"
+            "Non-transferable delta matches forfeitable at creation"
         );
         assertEq(
             veHemi.totalVeHemiSupply() - snap.preTotal,
@@ -3330,7 +3330,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // R6-M5 quantitative slope changes
         int128 expectedSlopeChange = -int128(int256(snap.slope));
-        assertEq(veHemi.lockedSlopeChanges(snap.ta), expectedSlopeChange, "lockedSlopeChanges[TA] = -slope");
+        assertEq(veHemi.nonTransferableSlopeChanges(snap.ta), expectedSlopeChange, "nonTransferableSlopeChanges[TA] = -slope");
         assertEq(veHemi.forfeitableSlopeChanges(snap.ta), expectedSlopeChange, "forfeitableSlopeChanges[TA] = -slope");
         assertEq(veHemi.slopeChanges(snap.ta), expectedSlopeChange, "global slopeChanges[TA] = -slope (lock.end == TA)");
     }
@@ -3359,8 +3359,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         assertEq(veHemi.slopeChanges(snap.ta), int128(0), "Global slopeChanges[ta] cancelled after ext 1");
         assertEq(veHemi.slopeChanges(endExt1), expectedSlopeChange, "Global slopeChanges[endExt1] = -slope after ext 1");
         // Subcurve slope change at TA UNCHANGED
-        assertEq(veHemi.lockedSlopeChanges(snap.ta), expectedSlopeChange, "lockedSlopeChanges[TA] unchanged after ext 1");
-        assertEq(veHemi.lockedSlopeChanges(endExt1), int128(0), "No lockedSlopeChanges at endExt1");
+        assertEq(veHemi.nonTransferableSlopeChanges(snap.ta), expectedSlopeChange, "nonTransferableSlopeChanges[TA] unchanged after ext 1");
+        assertEq(veHemi.nonTransferableSlopeChanges(endExt1), int128(0), "No nonTransferableSlopeChanges at endExt1");
     }
 
     function _verifyTest58Ext2(uint256 tokenId, uint256 endExt1, Test58Snapshot memory snap)
@@ -3419,9 +3419,9 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Forfeitable delta = newSlope*(TA-t0) after increaseAmount"
         );
         assertEq(
-            veHemi.nonTransferableTotalVeHemiSupply() - snap.preLocked,
+            veHemi.nonTransferableTotalVeHemiSupply() - snap.preNonTransferable,
             expectedForfAfterIncrease,
-            "Locked delta matches forfeitable after increaseAmount"
+            "Non-transferable delta matches forfeitable after increaseAmount"
         );
         assertEq(
             veHemi.totalVeHemiSupply() - snap.preTotal,
@@ -3429,9 +3429,9 @@ contract ForkUpgradeLockedCurveTest is Test {
             "Global delta = newSlope*(endExt2-t0) after increaseAmount"
         );
 
-        // L-9.5/R4-M4: lockedSlopeChanges[TA] updated to -newSlope
+        // L-9.5/R4-M4: nonTransferableSlopeChanges[TA] updated to -newSlope
         int128 expectedNewSlopeChange = -int128(int256(newSlope));
-        assertEq(veHemi.lockedSlopeChanges(snap.ta), expectedNewSlopeChange, "lockedSlopeChanges[TA] = -newSlope");
+        assertEq(veHemi.nonTransferableSlopeChanges(snap.ta), expectedNewSlopeChange, "nonTransferableSlopeChanges[TA] = -newSlope");
         assertEq(veHemi.forfeitableSlopeChanges(snap.ta), expectedNewSlopeChange, "forfeitableSlopeChanges[TA] = -newSlope");
         assertEq(veHemi.slopeChanges(endExt2), expectedNewSlopeChange, "Global slopeChanges[endExt2] = -newSlope");
 
@@ -3475,7 +3475,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // R5-M5: warp past TA, position must exit subcurves
         // Capture seed-projected baselines at the future timestamp BEFORE warping
         uint256 futureTime = snap.ta + 1;
-        uint256 seedLockedAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
+        uint256 seedNonTransferableAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
         uint256 seedForfeitableAtFuture = veHemi.forfeitableTotalVeHemiSupplyAt(futureTime);
         uint256 seedTotalAtFuture = veHemi.totalVeHemiSupplyAt(futureTime);
 
@@ -3490,7 +3490,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            seedLockedAtFuture,
+            seedNonTransferableAtFuture,
             "Locked = seed-projection after TA"
         );
         // Global = seed-projection (already includes our position contributing newSlope*(endExt3-now))
@@ -3610,7 +3610,7 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         vm.startPrank(GNOSIS_SAFE);
         hemiToken.approve(address(veHemi), 200 ether);
-        uint256 tLocked = veHemi.createLockFor(100 ether, MAX_TIME / 2, address(0xAAAA), false, false);
+        uint256 tNonTransferable = veHemi.createLockFor(100 ether, MAX_TIME / 2, address(0xAAAA), false, false);
         uint256 tForf = veHemi.createLockFor(100 ether, MAX_TIME / 2, address(0xBBBB), false, true);
         vm.stopPrank();
 
@@ -3621,14 +3621,14 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Capture timestamps and ends for INDEPENDENT shadow calculation
         uint256 tNow = block.timestamp;
-        uint256 endLocked = veHemi.getLockedBalance(tLocked).end;
+        uint256 endNonTransferable = veHemi.getLockedBalance(tNonTransferable).end;
         uint256 endXfer = veHemi.getLockedBalance(tXfer).end;
         uint256 slope = uint256(100 ether) / MAX_TIME;
-        uint256 expectedLockedBias = slope * (endLocked - tNow);
+        uint256 expectedNonTransferableBias = slope * (endNonTransferable - tNow);
         uint256 expectedXferBias = slope * (endXfer - tNow);
 
         // Pre-forfeit independent shadow check
-        assertEq(veHemi.balanceOfNFT(tLocked), expectedLockedBias, "Locked bias = independent shadow pre-forfeit");
+        assertEq(veHemi.balanceOfNFT(tNonTransferable), expectedNonTransferableBias, "Non-transferable bias = independent shadow pre-forfeit");
         assertEq(veHemi.balanceOfNFT(tXfer), expectedXferBias, "Xfer bias = independent shadow pre-forfeit");
 
         // Hemi balances pre-forfeit
@@ -3638,8 +3638,8 @@ contract ForkUpgradeLockedCurveTest is Test {
         vm.prank(GNOSIS_SAFE);
         veHemi.forfeit(tForf);
 
-        // Locked-only position completely unaffected (still independent shadow)
-        assertEq(veHemi.balanceOfNFT(tLocked), expectedLockedBias, "Locked bias unchanged after forfeit");
+        // Non-transferable-only position completely unaffected (still independent shadow)
+        assertEq(veHemi.balanceOfNFT(tNonTransferable), expectedNonTransferableBias, "Non-transferable bias unchanged after forfeit");
         // Transferable position completely unaffected (still independent shadow)
         assertEq(veHemi.balanceOfNFT(tXfer), expectedXferBias, "Xfer bias unchanged after forfeit");
         // Forfeitable back to seed-only
@@ -3672,14 +3672,14 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
 
         // Other tokens still exist with fully intact storage (R11: re-verify all fields)
-        assertEq(veHemi.ownerOf(tLocked), address(0xAAAA), "tLocked owner intact");
+        assertEq(veHemi.ownerOf(tNonTransferable), address(0xAAAA), "tNonTransferable owner intact");
         assertEq(veHemi.ownerOf(tXfer), address(0xCCCC), "tXfer owner intact");
-        assertEq(veHemi.getLockedBalance(tLocked).amount, int128(int256(uint256(100 ether))), "tLocked amount intact");
+        assertEq(veHemi.getLockedBalance(tNonTransferable).amount, int128(int256(uint256(100 ether))), "tNonTransferable amount intact");
         assertEq(veHemi.getLockedBalance(tXfer).amount, int128(int256(uint256(100 ether))), "tXfer amount intact");
-        assertEq(veHemi.getLockedBalance(tLocked).end, endLocked, "tLocked end intact");
+        assertEq(veHemi.getLockedBalance(tNonTransferable).end, endNonTransferable, "tNonTransferable end intact");
         assertEq(veHemi.getLockedBalance(tXfer).end, endXfer, "tXfer end intact");
-        assertEq(veHemi.transferableAfter(tLocked), endLocked, "tLocked TA intact");
-        assertEq(veHemi.provider(tLocked), GNOSIS_SAFE, "tLocked provider intact");
+        assertEq(veHemi.transferableAfter(tNonTransferable), endNonTransferable, "tNonTransferable TA intact");
+        assertEq(veHemi.provider(tNonTransferable), GNOSIS_SAFE, "tNonTransferable provider intact");
         assertEq(veHemi.provider(tXfer), address(0xCCCC), "tXfer provider intact");
 
         _assertOrdering("After forfeit with all 3 types");
@@ -3760,7 +3760,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         uint256 tokenId = veHemi.createLockFor(100 ether, 2 * SIX_DAYS, address(0xAAAA), false, true);
         vm.stopPrank();
 
-        // R9: totalLocked delta on create
+        // R9: totalNon-transferable delta on create
         assertEq(veHemi.totalLocked(), preTotalLocked59e + 100 ether, "totalLocked +100 on create");
 
         uint256 t0 = block.timestamp;
@@ -3803,7 +3803,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Verify subcurve slope change at TA still scheduled
         int128 expectedSC = -int128(int256(slope));
         assertEq(veHemi.forfeitableSlopeChanges(ta), expectedSC, "forfeitableSlopeChanges[TA] = -slope");
-        assertEq(veHemi.lockedSlopeChanges(ta), expectedSC, "lockedSlopeChanges[TA] = -slope");
+        assertEq(veHemi.nonTransferableSlopeChanges(ta), expectedSC, "nonTransferableSlopeChanges[TA] = -slope");
         // Global slope change at new end
         assertEq(veHemi.slopeChanges(newEnd), expectedSC, "Global slopeChanges[newEnd] = -slope");
 
@@ -3865,14 +3865,14 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Capture seed-projected baselines at the future timestamp BEFORE warping
         uint256 futureTime = ta + 1;
-        uint256 seedLockedAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
+        uint256 seedNonTransferableAtFuture = veHemi.nonTransferableTotalVeHemiSupplyAt(futureTime);
         uint256 seedForfeitableAtFuture = veHemi.forfeitableTotalVeHemiSupplyAt(futureTime);
 
         // Warp past TA — subcurve exited
         _warpAndRoll(futureTime - block.timestamp);
         veHemi.checkpoint();
         assertEq(veHemi.forfeitableTotalVeHemiSupply(), seedForfeitableAtFuture, "Forfeitable = seed-projection post-TA");
-        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), seedLockedAtFuture, "Locked = seed-projection post-TA");
+        assertEq(veHemi.nonTransferableTotalVeHemiSupply(), seedNonTransferableAtFuture, "Locked = seed-projection post-TA");
 
         // Old slope and old position bias (independent)
         uint256 oldSlope = uint256(100 ether) / MAX_TIME;
@@ -3888,7 +3888,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         veHemi.increaseAmount(tokenId, 100 ether);
         vm.stopPrank();
 
-        // R9: totalLocked delta +100, user HEMI delta -100
+        // R9: totalNon-transferable delta +100, user HEMI delta -100
         assertEq(veHemi.totalLocked(), totalLockedBefore + 100 ether, "totalLocked +100 after increase");
         assertEq(
             hemiToken.balanceOf(address(0xAAAA)),
@@ -3905,7 +3905,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            seedLockedAtFuture,
+            seedNonTransferableAtFuture,
             "Locked still seed-projection after post-TA increaseAmount"
         );
 
@@ -3978,7 +3978,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // (pre-forfeit subcurves - this position's contribution at halfway).
         uint256 slope = uint256(100 ether) / MAX_TIME;
         uint256 thisPositionForfContribution = slope * (ta - halfway);
-        uint256 seedLockedAtHalfway = veHemi.nonTransferableTotalVeHemiSupplyAt(halfway);
+        uint256 seedNonTransferableAtHalfway = veHemi.nonTransferableTotalVeHemiSupplyAt(halfway);
         uint256 seedForfeitableAtHalfway = veHemi.forfeitableTotalVeHemiSupplyAt(halfway);
 
         _warpAndRoll(halfway - block.timestamp);
@@ -3994,7 +3994,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            seedLockedAtHalfway,
+            seedNonTransferableAtHalfway,
             "Locked matches seed-projection pre-forfeit"
         );
 
@@ -4030,7 +4030,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         );
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            seedLockedAtHalfway - thisPositionForfContribution,
+            seedNonTransferableAtHalfway - thisPositionForfContribution,
             "Locked = pre - thisPositionContribution after forfeit"
         );
 
@@ -4049,7 +4049,7 @@ contract ForkUpgradeLockedCurveTest is Test {
     function testIndependentSubcurveAggregateCheck() public onlyFork {
         _upgradeAndSeed();
 
-        // Create 3 non-transferable positions (2 forfeitable, 1 locked-only)
+        // Create 3 non-transferable positions (2 forfeitable, 1 non-transferable-only)
         deal(HEMI_TOKEN, GNOSIS_SAFE, 300 ether);
         vm.startPrank(GNOSIS_SAFE);
         hemiToken.approve(address(veHemi), 300 ether);
@@ -4066,7 +4066,7 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Warp to a time between taA and taB. At that point:
         // - tA has exited subcurves (past taA): contributes 0 to forfeitable and locked
         // - tB is still in subcurves: forf = slope * (taB - now), locked = same
-        // - tC is still in locked subcurve (locked-only): locked = slope * (taC - now), forf = 0
+        // - tC is still in non-transferable subcurve (non-transferable-only): locked = slope * (taC - now), forf = 0
         _warpAndRoll(taA + (taB - taA) / 2 - block.timestamp);
         veHemi.checkpoint();
 
@@ -4121,9 +4121,9 @@ contract ForkUpgradeLockedCurveTest is Test {
         // Slope changes at shared TA should be -2*slope (accumulated from A + B)
         int128 expectedCumulative = -int128(int256(2 * slope));
         assertEq(
-            veHemi.lockedSlopeChanges(taA),
+            veHemi.nonTransferableSlopeChanges(taA),
             expectedCumulative,
-            "lockedSlopeChanges[TA] = -2*slope (both positions)"
+            "nonTransferableSlopeChanges[TA] = -2*slope (both positions)"
         );
         assertEq(
             veHemi.forfeitableSlopeChanges(taA),
@@ -4156,9 +4156,9 @@ contract ForkUpgradeLockedCurveTest is Test {
 
         // Subcurve slope changes at TA should still be -2*slope (TA still bounds BOTH subcurves)
         assertEq(
-            veHemi.lockedSlopeChanges(taA),
+            veHemi.nonTransferableSlopeChanges(taA),
             expectedCumulative,
-            "lockedSlopeChanges[TA] still -2*slope after extending A"
+            "nonTransferableSlopeChanges[TA] still -2*slope after extending A"
         );
         assertEq(
             veHemi.forfeitableSlopeChanges(taA),

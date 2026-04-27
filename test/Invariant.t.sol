@@ -135,7 +135,7 @@ contract InvariantTest is Test {
         // same underlying curves at the same timestamp. Any tolerance would
         // mask a real accounting divergence.
         assertEq(total, veHemi.totalVeHemiSupply(), "breakdown total != totalVeHemiSupply");
-        assertEq(locked_, veHemi.nonTransferableTotalVeHemiSupply(), "breakdown locked != nonTransferableTotalVeHemiSupply");
+        assertEq(locked_, veHemi.nonTransferableTotalVeHemiSupply(), "breakdown non-transferable != nonTransferableTotalVeHemiSupply");
         assertEq(forfeitable_, veHemi.forfeitableTotalVeHemiSupply(), "breakdown forfeitable != forfeitableTotalVeHemiSupply");
     }
 
@@ -172,11 +172,11 @@ contract InvariantTest is Test {
             veHemi.forfeitAdmin(),
             "slot 5 (forfeitAdmin) decoupled from getter"
         );
-        // Slot 18: lockedSeedingFinalized (bool at offset 0, low byte only).
+        // Slot 18: nonTransferableSeedingFinalized (bool at offset 0, low byte only).
         // Masking to the low byte makes this assertion robust to a future
         // pack that adds another small field into the same slot.
         bool rawSeedFlag = (uint256(vm.load(address(veHemi), bytes32(uint256(18)))) & 0xff) != 0;
-        assertEq(rawSeedFlag, veHemi.lockedSeedingFinalized(), "slot 18 (lockedSeedingFinalized) decoupled");
+        assertEq(rawSeedFlag, veHemi.nonTransferableSeedingFinalized(), "slot 18 (nonTransferableSeedingFinalized) decoupled");
     }
 
     /// @dev V2 reserved slots 14 and 15 (`__reservedSlot0/1`) are declared

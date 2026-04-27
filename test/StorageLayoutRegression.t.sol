@@ -41,20 +41,20 @@ contract StorageLayoutRegressionTest is Test {
     }
 
     /// @dev Simulate a layout regression where the V2 field
-    ///      `lockedSeedingFinalized` accidentally moved to a V1 slot.
+    ///      `nonTransferableSeedingFinalized` accidentally moved to a V1 slot.
     ///      Corrupt slot 18 and confirm the getter picks up the change —
     ///      this is the exact mechanism by which the layout tests catch
     ///      slot-shift regressions.
     function test_Slot18Corruption_IsDetectedByGetter() public {
-        assertFalse(veHemi.lockedSeedingFinalized(), "baseline zero");
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "baseline zero");
 
         // Write `true` to slot 18 low byte.
         vm.store(proxy, bytes32(uint256(18)), bytes32(uint256(1)));
-        assertTrue(veHemi.lockedSeedingFinalized(), "getter reflects raw write");
+        assertTrue(veHemi.nonTransferableSeedingFinalized(), "getter reflects raw write");
 
         // Clear it again.
         vm.store(proxy, bytes32(uint256(18)), bytes32(uint256(0)));
-        assertFalse(veHemi.lockedSeedingFinalized(), "getter reflects raw clear");
+        assertFalse(veHemi.nonTransferableSeedingFinalized(), "getter reflects raw clear");
     }
 
     /// @dev If a future change erroneously moved `totalLocked` from slot 0 to
@@ -231,21 +231,21 @@ contract StorageLayoutRegressionTest is Test {
         );
     }
 
-    /// @dev Fifth mutant: VeHemiStorageV2 with lockedSlopeChanges (slot 16)
-    ///      and lockedGlobalPointHistory (slot 17) swapped. Proves that a
+    /// @dev Fifth mutant: VeHemiStorageV2 with nonTransferableSlopeChanges (slot 16)
+    ///      and nonTransferableGlobalPointHistory (slot 17) swapped. Proves that a
     ///      top-level V2 slot swap decodes differently at the mapping base —
     ///      `StorageLayoutGolden.t.sol::test_VeHemi_V2SlotsAtExpectedPositions`
     ///      fires because the JSON golden pins slot→label mapping.
     function test_SwappedV2SubcurveSlots_DiscriminatesLayout() public {
         VeHemiBadV2SlotSwap mutant = new VeHemiBadV2SlotSwap();
 
-        // Under SWAPPED layout: setLockedSlopeChange(ts, v) writes to
-        // keccak(ts, 17) (what the CORRECT layout uses for lockedGlobalPointHistory).
+        // Under SWAPPED layout: setNonTransferableSlopeChange(ts, v) writes to
+        // keccak(ts, 17) (what the CORRECT layout uses for nonTransferableGlobalPointHistory).
         uint256 ts = 999;
         int128 v = 12345;
-        mutant.setLockedSlopeChange(ts, v);
+        mutant.setNonTransferableSlopeChange(ts, v);
 
-        // Read keccak(ts, 16) (CORRECT layout's lockedSlopeChanges slot) — zero.
+        // Read keccak(ts, 16) (CORRECT layout's nonTransferableSlopeChanges slot) — zero.
         bytes32 correctSlopeSlot = keccak256(abi.encode(ts, uint256(16)));
         assertEq(
             uint256(vm.load(address(mutant), correctSlopeSlot)),
@@ -258,9 +258,9 @@ contract StorageLayoutRegressionTest is Test {
         assertTrue(raw != bytes32(0), "swap not observable at slot 17 keccak base");
 
         // Any positive-control golden assertion pinning
-        // `.storage[16].label == "lockedSlopeChanges"` would fire against
+        // `.storage[16].label == "nonTransferableSlopeChanges"` would fire against
         // a fixture regenerated from this layout (where slot 16 would
-        // decode as lockedGlobalPointHistory instead).
+        // decode as nonTransferableGlobalPointHistory instead).
     }
 
     /// @dev Sixth mutant: VeHemiDelegationStorageV2 with a field inserted
@@ -387,12 +387,12 @@ contract BadDelegationGapShrunk {
     }
 }
 
-/// @dev Fifth mutant: VeHemi V2 storage with `lockedSlopeChanges` and
-///      `lockedGlobalPointHistory` swapped (slots 16 ↔ 17). Minimal layout
+/// @dev Fifth mutant: VeHemi V2 storage with `nonTransferableSlopeChanges` and
+///      `nonTransferableGlobalPointHistory` swapped (slots 16 ↔ 17). Minimal layout
 ///      — only reproduces through slot 17 since the top-level slot swap
-///      is what matters. A sentinel written by `setLockedSlopeChange`
+///      is what matters. A sentinel written by `setNonTransferableSlopeChange`
 ///      ends up at keccak(ts, 17) under this layout, which would disagree
-///      with a Golden pin of `.storage[16].label == "lockedSlopeChanges"`.
+///      with a Golden pin of `.storage[16].label == "nonTransferableSlopeChanges"`.
 contract VeHemiBadV2SlotSwap {
     // Slots 0-13: V1 fields (14 minimal stubs).
     uint256 internal _s0; uint256 internal _s1; uint256 internal _s2;
@@ -408,12 +408,12 @@ contract VeHemiBadV2SlotSwap {
     // Slots 14-15: V2 reserved.
     uint256 internal __reservedSlot0;
     uint256 internal __reservedSlot1;
-    // SWAPPED: lockedGlobalPointHistory at 16, lockedSlopeChanges at 17.
-    mapping(uint256 => uint256) internal lockedGlobalPointHistory; // slot 16 (swapped)
-    mapping(uint256 => int128) internal lockedSlopeChanges;        // slot 17 (swapped)
+    // SWAPPED: nonTransferableGlobalPointHistory at 16, nonTransferableSlopeChanges at 17.
+    mapping(uint256 => uint256) internal nonTransferableGlobalPointHistory; // slot 16 (swapped)
+    mapping(uint256 => int128) internal nonTransferableSlopeChanges;        // slot 17 (swapped)
 
-    function setLockedSlopeChange(uint256 ts, int128 v) external {
-        lockedSlopeChanges[ts] = v;
+    function setNonTransferableSlopeChange(uint256 ts, int128 v) external {
+        nonTransferableSlopeChanges[ts] = v;
     }
 }
 

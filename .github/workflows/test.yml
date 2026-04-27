@@ -74,7 +74,7 @@ jobs:
                       EXTRA_ARGS="--fork-block-number $HEMI_FORK_BLOCK"
                   fi
                   forge test \
-                    --match-contract "ForkUpgradeVoteDelegation|ForkUpgradeLockedCurve" \
+                    --match-contract "ForkUpgradeVoteDelegation|ForkUpgradeNonTransferableCurve" \
                     --fork-url hemi \
                     --threads 1 \
                     $EXTRA_ARGS \
