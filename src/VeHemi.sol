@@ -737,86 +737,72 @@ contract VeHemi is
         uint8 _oldFlags = curveFlags_ & 0x0F;
         uint8 _newFlags = (curveFlags_ >> 4) & 0x0F;
 
-        // --- Global slope changes (use lock.end directly) ---
-        int128 _oldDslope = slopeChanges[oldLocked_.end];
-        int128 _newDslope;
-        if (newLocked_.end != 0) {
-            if (newLocked_.end == oldLocked_.end) {
-                _newDslope = _oldDslope;
-            } else {
-                _newDslope = slopeChanges[newLocked_.end];
-            }
-        }
+        // --- Global slope changes: every position counts (use lock.end directly) ---
+        _adjustSlopeChange(
+            slopeChanges,
+            oldLocked_.end, newLocked_.end,
+            _oldUserPoint.slope, _newUserPoint.slope,
+            true, true
+        );
 
-        if (oldLocked_.end > block.timestamp) {
-            _oldDslope += _oldUserPoint.slope;
-            if (newLocked_.end == oldLocked_.end) {
-                _oldDslope -= _newUserPoint.slope;
-            }
-            slopeChanges[oldLocked_.end] = _oldDslope;
-        }
-
-        if (newLocked_.end > block.timestamp && newLocked_.end > oldLocked_.end) {
-            _newDslope -= _newUserPoint.slope;
-            slopeChanges[newLocked_.end] = _newDslope;
-        }
-
-        // --- Subcurve slope changes (use min(lock.end, transferableAfter) as effective end) ---
+        // --- Subcurve slope changes: effective end is min(lock.end, transferableAfter) ---
         if (_oldFlags >= 1 || _newFlags >= 1) {
             uint256 _ta = transferableAfter[tokenId_];
-            // Effective ends for subcurves: bounded by transferableAfter
             uint256 _oldSubEnd = (oldLocked_.end != 0 && _ta < oldLocked_.end) ? _ta : oldLocked_.end;
             uint256 _newSubEnd = (newLocked_.end != 0 && _ta < newLocked_.end) ? _ta : newLocked_.end;
 
-            _scheduleSubcurveSlopeChanges(
-                _oldFlags, _newFlags, _oldSubEnd, _newSubEnd,
-                _oldUserPoint.slope, _newUserPoint.slope
+            // Non-transferable curve: gated by flag >= 1
+            _adjustSlopeChange(
+                nonTransferableSlopeChanges,
+                _oldSubEnd, _newSubEnd,
+                _oldUserPoint.slope, _newUserPoint.slope,
+                _oldFlags >= 1, _newFlags >= 1
+            );
+
+            // Forfeitable curve: gated by flag == 2
+            _adjustSlopeChange(
+                forfeitableSlopeChanges,
+                _oldSubEnd, _newSubEnd,
+                _oldUserPoint.slope, _newUserPoint.slope,
+                _oldFlags == 2, _newFlags == 2
             );
         }
     }
 
     /**
-     * @dev Schedules non-transferable + forfeitable slope changes at subcurve-specific endpoints.
-     *      Separated to manage stack depth.
+     * @dev Schedules slope-change adjustments for ONE curve at one or two endpoints.
+     *      Called once per curve (global, non-transferable, forfeitable) from
+     *      `_scheduleSlopeChanges`, with the curve-specific mapping, in-curve flags,
+     *      and effective ends.
+     *
+     *      Algorithm (same for every curve):
+     *        1. If position WAS in this curve (oldInCurve_ && oldEnd_ > now):
+     *             Cancel original retirement: slopeMap[oldEnd_] += oldSlope_.
+     *             If still in curve at SAME end: subtract newSlope_ in same write.
+     *        2. If position is in this curve at a NEW later end:
+     *             Schedule new retirement: slopeMap[newEnd_] -= newSlope_.
+     *
+     *      Same-end + still-in-curve case is folded into one SSTORE per affected slot.
      */
-    function _scheduleSubcurveSlopeChanges(
-        uint8 oldFlags_,
-        uint8 newFlags_,
-        uint256 oldSubEnd_,
-        uint256 newSubEnd_,
+    function _adjustSlopeChange(
+        mapping(uint256 => int128) storage slopeMap_,
+        uint256 oldEnd_,
+        uint256 newEnd_,
         int128 oldSlope_,
-        int128 newSlope_
+        int128 newSlope_,
+        bool oldInCurve_,
+        bool newInCurve_
     ) internal {
-        // --- Non-transferable curve slope changes ---
-        if (oldFlags_ >= 1 && oldSubEnd_ > block.timestamp) {
-            int128 _oldNonTransferableDslope = nonTransferableSlopeChanges[oldSubEnd_];
-            _oldNonTransferableDslope += oldSlope_;
-            if (newFlags_ >= 1 && newSubEnd_ == oldSubEnd_) {
-                _oldNonTransferableDslope -= newSlope_;
+        if (oldInCurve_ && oldEnd_ > block.timestamp) {
+            int128 _delta = oldSlope_;
+            if (newInCurve_ && newEnd_ == oldEnd_) {
+                _delta -= newSlope_;
             }
-            nonTransferableSlopeChanges[oldSubEnd_] = _oldNonTransferableDslope;
+            slopeMap_[oldEnd_] += _delta;
         }
 
-        if (newFlags_ >= 1 && newSubEnd_ > block.timestamp && newSubEnd_ > oldSubEnd_) {
-            int128 _newNonTransferableDslope = nonTransferableSlopeChanges[newSubEnd_];
-            _newNonTransferableDslope -= newSlope_;
-            nonTransferableSlopeChanges[newSubEnd_] = _newNonTransferableDslope;
-        }
-
-        // --- Forfeitable curve slope changes (same logic, only for flags == 2) ---
-        if (oldFlags_ == 2 && oldSubEnd_ > block.timestamp) {
-            int128 _oldForfDslope = forfeitableSlopeChanges[oldSubEnd_];
-            _oldForfDslope += oldSlope_;
-            if (newFlags_ == 2 && newSubEnd_ == oldSubEnd_) {
-                _oldForfDslope -= newSlope_;
-            }
-            forfeitableSlopeChanges[oldSubEnd_] = _oldForfDslope;
-        }
-
-        if (newFlags_ == 2 && newSubEnd_ > block.timestamp && newSubEnd_ > oldSubEnd_) {
-            int128 _newForfDslope = forfeitableSlopeChanges[newSubEnd_];
-            _newForfDslope -= newSlope_;
-            forfeitableSlopeChanges[newSubEnd_] = _newForfDslope;
+        if (newInCurve_ && newEnd_ > block.timestamp && newEnd_ > oldEnd_) {
+            slopeMap_[newEnd_] -= newSlope_;
         }
     }
 
