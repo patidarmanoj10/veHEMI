@@ -1475,17 +1475,24 @@ contract VeHemi is
         emit LockedSeedingFinalized(_epoch);
     }
 
-    /// @dev Walk a subcurve from `walkStart_` forward to `tsFinal_`,
-    ///      applying slope-changes at each SIX_DAYS bucket. Used by
-    ///      `finalizeSeeding` to materialize a LockedPoint that correctly
-    ///      accounts for positions whose `subEnd` lapsed inside the seeding
-    ///      window (the eagerly-written slope-changes at past buckets would
-    ///      otherwise be stranded — see `SeedingProgress.minSubEnd` NatSpec).
+    /// @dev Materialize subcurve state at `tsFinal_` from the seeding
+    ///      accumulator, consuming the slope-changes eagerly written by
+    ///      `seedBatch` along the way. Used only by `finalizeSeeding` when
+    ///      at least one seeded position's `subEnd` lapsed inside the
+    ///      seeding window (`minSubEnd < block.timestamp`).
+    ///
+    ///      Algorithm:
+    ///        1. Compute bias/slope at `walkStart_` (= minSubEnd) from the
+    ///           time-independent accumulator totals.
+    ///        2. Apply `slopeChanges[walkStart_]` to drop the slopes of
+    ///           positions ending exactly at minSubEnd.
+    ///        3. Walk forward to `tsFinal_` via `_walkCurve`, which consumes
+    ///           any remaining stranded slope-changes between the two.
     ///
     ///      All subEnds are on SIX_DAYS boundaries (since
     ///      `unlockTime = ((now + duration) / SIX_DAYS) * SIX_DAYS`), so a
-    ///      SIX_DAYS-stride walk from `walkStart_` (= minSubEnd, itself on
-    ///      a boundary) visits every subEnd bucket up to `tsFinal_`.
+    ///      SIX_DAYS-stride walk from `walkStart_` visits every seeded
+    ///      `subEnd` bucket up to `tsFinal_`.
     /// @param totalBias_ Sum of `slope_i * subEnd_i` across seeded positions.
     /// @param totalSlope_ Sum of `slope_i` across seeded positions.
     /// @param walkStart_ Earliest seeded `subEnd` (must be > 0 and < tsFinal_).
@@ -1498,42 +1505,25 @@ contract VeHemi is
         uint256 tsFinal_,
         bool isForfeitable_
     ) internal view returns (int128 bias, int128 slope) {
-        uint256 ts = walkStart_;
-        // bias just BEFORE drop-off at walkStart: positions with
-        // subEnd_i > walkStart_ contribute positively; positions with
-        // subEnd_i == walkStart_ contribute 0 (slope * 0).
-        bias = totalBias_ - totalSlope_ * uint256(ts).toInt256().toInt128();
+        // Initial state at walkStart, BEFORE applying slope-change at walkStart:
+        // positions with subEnd_i > walkStart contribute positively; positions
+        // with subEnd_i == walkStart contribute 0 (slope_i * 0).
+        bias = totalBias_ - totalSlope_ * uint256(walkStart_).toInt256().toInt128();
         slope = totalSlope_;
 
-        // Apply slope-change at walkStart (drops slopes of positions
-        // ending at exactly minSubEnd).
-        int128 dSlope = isForfeitable_
-            ? forfeitableSlopeChanges[ts]
-            : lockedSlopeChanges[ts];
-        slope += dSlope;
+        mapping(uint256 => int128) storage slopeChangesRef = isForfeitable_
+            ? forfeitableSlopeChanges
+            : lockedSlopeChanges;
+
+        // Apply slope-change at walkStart (drops slopes of positions ending
+        // at exactly minSubEnd). _walkCurve's first iteration starts at
+        // walkStart + SIX_DAYS and never re-reads this bucket.
+        slope += slopeChangesRef[walkStart_];
         if (slope < 0) slope = 0;
 
-        uint256 t_i = ts;
-        // Cap matches `_subcurveSupplyAtFromPoint` and `_supplyAt` (255).
-        // In practice the walk runs only as long as
-        // `(tsFinal_ - walkStart_) / SIX_DAYS`, which is bounded by the
-        // operator's seeding window duration (hours, not years).
-        for (uint256 i; i < 255; ++i) {
-            t_i += SIX_DAYS;
-            if (t_i >= tsFinal_) {
-                bias -= slope * (tsFinal_ - ts).toInt256().toInt128();
-                if (bias < 0) bias = 0;
-                return (bias, slope);
-            }
-            dSlope = isForfeitable_
-                ? forfeitableSlopeChanges[t_i]
-                : lockedSlopeChanges[t_i];
-            bias -= slope * (t_i - ts).toInt256().toInt128();
-            if (bias < 0) bias = 0;
-            slope += dSlope;
-            if (slope < 0) slope = 0;
-            ts = t_i;
-        }
+        // Forward walk to tsFinal_, consuming any remaining stranded
+        // slope-changes between walkStart_ + SIX_DAYS and tsFinal_.
+        return _walkCurve(bias, slope, walkStart_, tsFinal_, slopeChangesRef);
     }
 
     /**
@@ -1634,31 +1624,16 @@ contract VeHemi is
      *      Shared between locked and forfeitable curves — differs only in which slope change mapping is read.
      */
     function _subcurveSupplyAtFromPoint(LockedPoint memory point_, uint256 timestamp_, bool isForfeitable_) internal view returns (uint256) {
-        int128 bias = point_.bias;
-        int128 slope = point_.slope;
-        uint256 ts = point_.timestamp;
-
-        uint256 t_i = (ts / SIX_DAYS) * SIX_DAYS;
-        for (uint256 i; i < 255; ++i) {
-            t_i += SIX_DAYS;
-            int128 dSlope = 0;
-            if (t_i > timestamp_) {
-                t_i = timestamp_;
-            } else {
-                dSlope = isForfeitable_ ? forfeitableSlopeChanges[t_i] : lockedSlopeChanges[t_i];
-            }
-            bias -= slope * (t_i - ts).toInt256().toInt128();
-            if (t_i == timestamp_) {
-                break;
-            }
-            slope += dSlope;
-            if (slope < 0) slope = 0;
-            ts = t_i;
-        }
-
-        if (bias < 0) {
-            bias = 0;
-        }
+        mapping(uint256 => int128) storage slopeChangesRef = isForfeitable_
+            ? forfeitableSlopeChanges
+            : lockedSlopeChanges;
+        (int128 bias, ) = _walkCurve(
+            point_.bias,
+            point_.slope,
+            point_.timestamp,
+            timestamp_,
+            slopeChangesRef
+        );
         return bias.toUint256();
     }
 
@@ -1671,32 +1646,71 @@ contract VeHemi is
     }
 
     function _supplyAt(Point memory point_, uint256 timestamp_) internal view returns (uint256) {
-        int128 bias = point_.bias;
-        int128 slope = point_.slope;
-        uint256 ts = point_.timestamp;
+        (int128 bias, ) = _walkCurve(
+            point_.bias,
+            point_.slope,
+            point_.timestamp,
+            timestamp_,
+            slopeChanges
+        );
+        return bias.toUint256();
+    }
 
+    /// @dev Shared SIX_DAYS-stride curve walker. Decays `(bias, slope)`
+    ///      forward from `ts` to `targetTs`, applying slope-changes at each
+    ///      bucket boundary strictly greater than `ts` and strictly less
+    ///      than `targetTs`.
+    ///
+    ///      Contract for callers:
+    ///        - Input `(bias, slope, ts)` represents curve state AT `ts`
+    ///          AFTER any slope-change at `ts` has already been applied.
+    ///          (The walk never re-reads `slopeChangesRef_[ts]`.)
+    ///        - Returned `bias` is clamped to >= 0; slope is clamped >= 0
+    ///          at each step.
+    ///        - Slope-changes at exactly `targetTs` (if any) are NOT
+    ///          applied — consistent with veCRV "supply at" semantics:
+    ///          a query at time T sees state JUST BEFORE the slope drop
+    ///          scheduled for T. Affects only queries where `targetTs`
+    ///          coincides with a SIX_DAYS bucket boundary.
+    ///        - Iteration cap (255) mirrors `_checkpoint`'s catchup loop;
+    ///          if exceeded, the walk exits with whatever state it reached.
+    ///
+    ///      This helper replaces the three near-identical walks that used
+    ///      to live in `_supplyAt`, `_subcurveSupplyAtFromPoint`, and
+    ///      `_materializeFromAccumulator`. Passing the slope-changes
+    ///      mapping by storage reference compiles to the same slot-offset
+    ///      access as inline reads.
+    /// @param bias Initial bias at `ts`.
+    /// @param slope Initial slope at `ts`.
+    /// @param ts Initial timestamp; need not be on a SIX_DAYS boundary.
+    /// @param targetTs Target timestamp to walk to.
+    /// @param slopeChangesRef_ Storage mapping of slope-change deltas keyed
+    ///        by SIX_DAYS bucket boundary.
+    /// @return outBias Final bias at `targetTs`, clamped to >= 0.
+    /// @return outSlope Final slope at `targetTs`, clamped to >= 0.
+    function _walkCurve(
+        int128 bias,
+        int128 slope,
+        uint256 ts,
+        uint256 targetTs,
+        mapping(uint256 => int128) storage slopeChangesRef_
+    ) private view returns (int128 outBias, int128 outSlope) {
         uint256 t_i = (ts / SIX_DAYS) * SIX_DAYS;
         for (uint256 i; i < 255; ++i) {
             t_i += SIX_DAYS;
-            int128 dSlope = 0;
-            if (t_i > timestamp_) {
-                t_i = timestamp_;
-            } else {
-                dSlope = slopeChanges[t_i];
+            if (t_i >= targetTs) {
+                bias -= slope * (targetTs - ts).toInt256().toInt128();
+                if (bias < 0) bias = 0;
+                return (bias, slope);
             }
+            int128 dSlope = slopeChangesRef_[t_i];
             bias -= slope * (t_i - ts).toInt256().toInt128();
-            if (t_i == timestamp_) {
-                break;
-            }
             slope += dSlope;
             if (slope < 0) slope = 0;
             ts = t_i;
         }
-
-        if (bias < 0) {
-            bias = 0;
-        }
-        return bias.toUint256();
+        if (bias < 0) bias = 0;
+        return (bias, slope);
     }
 
     /// @dev Notifies the reward distributor of a position change. Fails silently (try/catch)
