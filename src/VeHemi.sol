@@ -1269,6 +1269,10 @@ contract VeHemi is
         int128 batchForfSlope;
         int128 batchForfBias;
         uint256 batchCount;
+        // Earliest subEnd seen in this batch (used by finalizeSeeding to
+        // detect and repair phantom carry — see _materializeFromAccumulator).
+        // Sentinel 0 = "no positions included yet"; valid subEnds are always > 0.
+        uint64 batchMinSubEnd;
 
         // IMPORTANT — skip-condition coupling: the same filter is duplicated
         // in `test/Invariant.t.sol` (`invariant_nonTransferableEqualsPerPositionSum`
@@ -1302,6 +1306,14 @@ contract VeHemi is
                 batchForfBias += slope * _subEndI;
                 forfeitableSlopeChanges[_subEnd] -= slope;
             }
+
+            // Track earliest subEnd across INCLUDED positions only. Placed
+            // after the four skip predicates so filtered ids don't influence
+            // the walk-back starting point at finalize.
+            uint64 _subEnd64 = uint64(_subEnd);
+            if (batchMinSubEnd == 0 || _subEnd64 < batchMinSubEnd) {
+                batchMinSubEnd = _subEnd64;
+            }
         }
 
         // Flush batch into the persistent accumulator.
@@ -1311,6 +1323,15 @@ contract VeHemi is
         progress.totalForfeitableSlope += batchForfSlope;
         progress.totalForfeitableBias += batchForfBias;
         progress.count += batchCount;
+
+        // Merge batch min into persistent min. Compare-and-swap pattern so
+        // calls across many blocks/keepers converge to the global minimum.
+        if (batchMinSubEnd != 0) {
+            uint64 _existingMin = progress.minSubEnd;
+            if (_existingMin == 0 || batchMinSubEnd < _existingMin) {
+                progress.minSubEnd = batchMinSubEnd;
+            }
+        }
     }
 
     /**
@@ -1381,6 +1402,7 @@ contract VeHemi is
         int128 _totalBias = progress.totalBias;
         int128 _totalForfeitableSlope = progress.totalForfeitableSlope;
         int128 _totalForfeitableBias = progress.totalForfeitableBias;
+        uint64 _minSubEnd = progress.minSubEnd;
 
         // Advance the global epoch to block.timestamp. Subcurve logic in
         // `_checkpoint` remains gated on `lockedSeedingFinalized`, which is
@@ -1389,26 +1411,60 @@ contract VeHemi is
         _checkpoint(0, LockedBalance(0, 0), LockedBalance(0, 0));
 
         uint256 _epoch = epoch;
-        int128 _tsInt = uint256(block.timestamp).toInt256().toInt128();
 
-        // Locked point: derive bias at block.timestamp from time-independent total.
-        int128 _lockedBias = _totalBias - _totalSlope * _tsInt;
+        int128 _lockedBias;
+        int128 _lockedSlope;
+        int128 _forfeitableBias;
+        int128 _forfeitableSlope;
+
+        // Phantom-carry mitigation: if any seeded position's subEnd lapsed
+        // during the seeding window (minSubEnd < block.timestamp), the
+        // seedBatch-written slope-changes at those past buckets would be
+        // stranded — the post-finalize forward walk only steps from tsFinal
+        // onward and never revisits past buckets. Instead, materialize the
+        // LockedPoints by walking from minSubEnd forward to block.timestamp
+        // and consuming the stranded slope-changes along the way. On the
+        // happy path (minSubEnd == 0 means nothing seeded, or minSubEnd >=
+        // block.timestamp means every seeded position is still in its
+        // non-transferable window) the direct formula is exact and the
+        // walk is skipped.
+        if (_minSubEnd == 0 || _minSubEnd >= block.timestamp) {
+            int128 _tsInt = uint256(block.timestamp).toInt256().toInt128();
+            _lockedBias = _totalBias - _totalSlope * _tsInt;
+            _lockedSlope = _totalSlope;
+            _forfeitableBias = _totalForfeitableBias - _totalForfeitableSlope * _tsInt;
+            _forfeitableSlope = _totalForfeitableSlope;
+        } else {
+            (_lockedBias, _lockedSlope) = _materializeFromAccumulator(
+                _totalBias,
+                _totalSlope,
+                uint256(_minSubEnd),
+                block.timestamp,
+                false
+            );
+            (_forfeitableBias, _forfeitableSlope) = _materializeFromAccumulator(
+                _totalForfeitableBias,
+                _totalForfeitableSlope,
+                uint256(_minSubEnd),
+                block.timestamp,
+                true
+            );
+        }
+
         if (_lockedBias < 0) _lockedBias = 0;
+        if (_forfeitableBias < 0) _forfeitableBias = 0;
 
         lockedGlobalPointHistory[_epoch] = LockedPoint({
             bias: _lockedBias,
-            slope: _totalSlope,
+            slope: _lockedSlope,
             timestamp: block.timestamp.toUint64(),
             blockNumber: block.number.toUint64()
         });
 
         // Forfeitable point: always write (even if zero) so timestamp != 0 for view functions.
-        int128 _forfeitableBias = _totalForfeitableBias - _totalForfeitableSlope * _tsInt;
-        if (_forfeitableBias < 0) _forfeitableBias = 0;
-
         forfeitableGlobalPointHistory[_epoch] = LockedPoint({
             bias: _forfeitableBias,
-            slope: _totalForfeitableSlope,
+            slope: _forfeitableSlope,
             timestamp: block.timestamp.toUint64(),
             blockNumber: block.number.toUint64()
         });
@@ -1417,6 +1473,67 @@ contract VeHemi is
         delete _seedingProgress;
 
         emit LockedSeedingFinalized(_epoch);
+    }
+
+    /// @dev Walk a subcurve from `walkStart_` forward to `tsFinal_`,
+    ///      applying slope-changes at each SIX_DAYS bucket. Used by
+    ///      `finalizeSeeding` to materialize a LockedPoint that correctly
+    ///      accounts for positions whose `subEnd` lapsed inside the seeding
+    ///      window (the eagerly-written slope-changes at past buckets would
+    ///      otherwise be stranded — see `SeedingProgress.minSubEnd` NatSpec).
+    ///
+    ///      All subEnds are on SIX_DAYS boundaries (since
+    ///      `unlockTime = ((now + duration) / SIX_DAYS) * SIX_DAYS`), so a
+    ///      SIX_DAYS-stride walk from `walkStart_` (= minSubEnd, itself on
+    ///      a boundary) visits every subEnd bucket up to `tsFinal_`.
+    /// @param totalBias_ Sum of `slope_i * subEnd_i` across seeded positions.
+    /// @param totalSlope_ Sum of `slope_i` across seeded positions.
+    /// @param walkStart_ Earliest seeded `subEnd` (must be > 0 and < tsFinal_).
+    /// @param tsFinal_ Target timestamp at which to materialize (block.timestamp).
+    /// @param isForfeitable_ True for forfeitable subcurve, false for locked.
+    function _materializeFromAccumulator(
+        int128 totalBias_,
+        int128 totalSlope_,
+        uint256 walkStart_,
+        uint256 tsFinal_,
+        bool isForfeitable_
+    ) internal view returns (int128 bias, int128 slope) {
+        uint256 ts = walkStart_;
+        // bias just BEFORE drop-off at walkStart: positions with
+        // subEnd_i > walkStart_ contribute positively; positions with
+        // subEnd_i == walkStart_ contribute 0 (slope * 0).
+        bias = totalBias_ - totalSlope_ * uint256(ts).toInt256().toInt128();
+        slope = totalSlope_;
+
+        // Apply slope-change at walkStart (drops slopes of positions
+        // ending at exactly minSubEnd).
+        int128 dSlope = isForfeitable_
+            ? forfeitableSlopeChanges[ts]
+            : lockedSlopeChanges[ts];
+        slope += dSlope;
+        if (slope < 0) slope = 0;
+
+        uint256 t_i = ts;
+        // Cap matches `_subcurveSupplyAtFromPoint` and `_supplyAt` (255).
+        // In practice the walk runs only as long as
+        // `(tsFinal_ - walkStart_) / SIX_DAYS`, which is bounded by the
+        // operator's seeding window duration (hours, not years).
+        for (uint256 i; i < 255; ++i) {
+            t_i += SIX_DAYS;
+            if (t_i >= tsFinal_) {
+                bias -= slope * (tsFinal_ - ts).toInt256().toInt128();
+                if (bias < 0) bias = 0;
+                return (bias, slope);
+            }
+            dSlope = isForfeitable_
+                ? forfeitableSlopeChanges[t_i]
+                : lockedSlopeChanges[t_i];
+            bias -= slope * (t_i - ts).toInt256().toInt128();
+            if (bias < 0) bias = 0;
+            slope += dSlope;
+            if (slope < 0) slope = 0;
+            ts = t_i;
+        }
     }
 
     /**

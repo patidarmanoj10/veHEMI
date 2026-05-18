@@ -97,9 +97,24 @@ abstract contract VeHemiStorageV2 is VeHemiStorageV1 {
 
     /// @notice Accumulator carried across multiple `seedBatch` calls. The
     ///         struct packs `lastProcessedId` (1 slot) + two int128 pairs
-    ///         (2 slots) + `count` (1 slot) = 4 slots total. Cleared
-    ///         (`delete`) during `finalizeSeeding` after the aggregate
-    ///         `SupplyPoint`s are written.
+    ///         (2 slots) + `count` (1 slot) + `minSubEnd` (1 slot) = 5 slots
+    ///         total. Cleared (`delete`) during `finalizeSeeding` after the
+    ///         aggregate `SupplyPoint`s are written.
+    ///
+    /// @dev `minSubEnd` is the earliest `subEnd` across all positions
+    ///      INCLUDED by `seedBatch` (i.e., positions that passed the
+    ///      burned/transferable/expired/empty skip predicates). It is used
+    ///      by `finalizeSeeding` to detect "phantom carry": if `minSubEnd <
+    ///      block.timestamp` at finalize time, at least one seeded
+    ///      position's `subEnd` has lapsed during the seeding window. The
+    ///      slope-change at that `subEnd` was eagerly written by
+    ///      `seedBatch` but lives in a past bucket — the post-finalize
+    ///      forward walk would never revisit it. Finalize instead walks
+    ///      from `minSubEnd` to `block.timestamp` consuming the stranded
+    ///      slope-changes before writing the LockedPoint, producing a
+    ///      correct seeded subcurve regardless of `subEnd` distribution.
+    ///      Sentinel value `0` = "no positions seeded yet" (no live
+    ///      non-transferable position can have `subEnd == 0`).
     struct SeedingProgress {
         uint256 lastProcessedId;
         int128 totalSlope;
@@ -107,6 +122,7 @@ abstract contract VeHemiStorageV2 is VeHemiStorageV1 {
         int128 totalForfeitableSlope;
         int128 totalForfeitableBias;
         uint256 count;
+        uint64 minSubEnd;
     }
 
     /// @notice In-progress seeding accumulator. See `SeedingProgress`.
@@ -123,7 +139,7 @@ abstract contract VeHemiStorageV2 is VeHemiStorageV1 {
     ///        Slot 6:    forfeitableGlobalPointHistory (mapping base)
     ///        Slot 7:    seedingStarted (bool, 1B) + seedingStartedAt (uint64, 8B) packed
     ///        Slot 8:    seedingTargetId (uint256)
-    ///        Slots 9-12: _seedingProgress (4 slots)
-    ///      Total named slots: 13. Gap: 50 - 13 = 37.
-    uint256[37] private __gapV2;
+    ///        Slots 9-13: _seedingProgress (5 slots)
+    ///      Total named slots: 14. Gap: 50 - 14 = 36.
+    uint256[36] private __gapV2;
 }

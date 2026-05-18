@@ -47,7 +47,8 @@ import "./mocks/MockHemiVoteDelegation.sol";
 ///          24: _seedingProgress.{totalSlope, totalBias} (packed)
 ///          25: _seedingProgress.{totalForfeitableSlope, totalForfeitableBias} (packed)
 ///          26: _seedingProgress.count
-///          27–63: __gapV2[37]
+///          27: _seedingProgress.minSubEnd (uint64, offset 0)
+///          28–63: __gapV2[36]
 contract VeHemiStorageLayoutTest is Test {
     VeHemi veHemi;
     address proxy;
@@ -537,16 +538,17 @@ contract VeHemiStorageLayoutTest is Test {
         );
     }
 
-    function test_slot23to26_seedingProgressLayout() public {
-        // _seedingProgress is a 4-slot struct starting at slot 23:
+    function test_slot23to27_seedingProgressLayout() public {
+        // _seedingProgress is a 5-slot struct starting at slot 23:
         //   slot 23: lastProcessedId (uint256)
         //   slot 24: {int128 totalSlope [offset 0], int128 totalBias [offset 16]}
         //   slot 25: {int128 totalForfeitableSlope, int128 totalForfeitableBias}
         //   slot 26: count (uint256)
+        //   slot 27: minSubEnd (uint64, offset 0; upper 24 bytes reserved)
         //
         // No public getter for the struct, so verify via direct vm.load
         // round-trip + anti-alias against slot 22 (seedingTargetId) and
-        // slot 27 (start of __gapV2). A swap of totalSlope ↔ totalBias
+        // slot 28 (start of __gapV2). A swap of totalSlope ↔ totalBias
         // would silently miscompute `_lockedBias = totalBias - totalSlope * t`
         // in `finalizeSeeding`; this test pins the offsets so a future
         // declaration-order swap is caught at storage-layout-test time AND
@@ -565,19 +567,23 @@ contract VeHemiStorageLayoutTest is Test {
             uint256(uint128(uint256(int256(int128(0x4444)))))
         );
         bytes32 slot26Val = bytes32(uint256(0x6666));
+        // slot 27: minSubEnd=0x7777 at offset 0 (uint64); upper 24 bytes zero.
+        bytes32 slot27Val = bytes32(uint256(0x7777));
 
         vm.store(proxy, bytes32(uint256(23)), slot23Val);
         vm.store(proxy, bytes32(uint256(24)), slot24Val);
         vm.store(proxy, bytes32(uint256(25)), slot25Val);
         vm.store(proxy, bytes32(uint256(26)), slot26Val);
+        vm.store(proxy, bytes32(uint256(27)), slot27Val);
 
         // Read back each slot to verify the writes landed exactly.
         assertEq(vm.load(proxy, bytes32(uint256(23))), slot23Val, "slot 23 (lastProcessedId)");
         assertEq(vm.load(proxy, bytes32(uint256(24))), slot24Val, "slot 24 (totalSlope|totalBias)");
         assertEq(vm.load(proxy, bytes32(uint256(25))), slot25Val, "slot 25 (forfeitable pair)");
         assertEq(vm.load(proxy, bytes32(uint256(26))), slot26Val, "slot 26 (count)");
+        assertEq(vm.load(proxy, bytes32(uint256(27))), slot27Val, "slot 27 (minSubEnd)");
 
-        // Anti-alias against slot 22 (seedingTargetId) and slot 27 (start
+        // Anti-alias against slot 22 (seedingTargetId) and slot 28 (start
         // of __gapV2). These should remain zero after the struct writes.
         assertEq(
             uint256(vm.load(proxy, bytes32(uint256(22)))),
@@ -585,23 +591,23 @@ contract VeHemiStorageLayoutTest is Test {
             "slot 22 aliased by _seedingProgress write"
         );
         assertEq(
-            uint256(vm.load(proxy, bytes32(uint256(27)))),
+            uint256(vm.load(proxy, bytes32(uint256(28)))),
             0,
-            "slot 27 (gap start) aliased by _seedingProgress write"
+            "slot 28 (gap start) aliased by _seedingProgress write"
         );
     }
 
     // =========================================================================
-    // V2 gap integrity: the gap now starts at slot 27 (six new V2 slots were
+    // V2 gap integrity: the gap now starts at slot 28 (seven new V2 slots were
     // added for the multi-phase seeding flow: seedingStarted, seedingTargetId,
-    // and the 4-slot _seedingProgress struct) and extends to slot 63 — 37
-    // slots total. Verify the gap region is clean (all zeros) and that
-    // writing at slot 63 (last gap slot) does NOT alias any named field.
+    // and the 5-slot _seedingProgress struct including minSubEnd) and extends
+    // to slot 63 — 36 slots total. Verify the gap region is clean (all zeros)
+    // and that writing at slot 63 (last gap slot) does NOT alias any named field.
     // =========================================================================
 
     function test_gapV2_doesNotAliasNamedFields() public view {
-        // Slots 27–63 should all be zero in a freshly initialized contract.
-        // Slots 21-26 are the seeding-control fields and are also zero pre-mark
+        // Slots 28–63 should all be zero in a freshly initialized contract.
+        // Slots 21-27 are the seeding-control fields and are also zero pre-mark
         // (seedingStarted == false, seedingTargetId == 0, _seedingProgress
         // all-zero), so we extend the check down to slot 21 to also pin the
         // seeding control surface as zero-initialized.

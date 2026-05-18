@@ -296,13 +296,13 @@ contract InvariantTest is Test {
         );
     }
 
-    /// @dev Storage-gap integrity: V2's `__gapV2[37]` occupies slots 27–63.
+    /// @dev Storage-gap integrity: V2's `__gapV2[36]` occupies slots 28–63.
     ///      They must remain zero under all handler operations. Any non-zero
     ///      slot in this range indicates a write ran off the end of a named
     ///      field (would happen if a struct size calculation were wrong or
     ///      storage was written beyond a mapping's expected layout).
     function invariant_gapSlotsZero() public view {
-        for (uint256 i = 27; i <= 63; ++i) {
+        for (uint256 i = 28; i <= 63; ++i) {
             assertEq(
                 vm.load(address(veHemi), bytes32(i)),
                 bytes32(0),
@@ -311,15 +311,17 @@ contract InvariantTest is Test {
         }
     }
 
-    /// @dev `_seedingProgress` occupies slots 23-26. While seeding is in
-    ///      flight (between `markSeedingStarted` and `finalizeSeeding`) these
-    ///      slots carry the accumulator; after `finalizeSeeding` runs the
+    /// @dev `_seedingProgress` occupies slots 23-27 (5 slots:
+    ///      lastProcessedId, packed slope/bias pair, packed forfeitable pair,
+    ///      count, minSubEnd). While seeding is in flight (between
+    ///      `markSeedingStarted` and `finalizeSeeding`) these slots carry the
+    ///      accumulator; after `finalizeSeeding` runs the
     ///      `delete _seedingProgress` clears them back to zero. The invariant
     ///      runner evaluates between handler calls, when seeding is either
     ///      not yet started or fully finalized — so the accumulator MUST be
     ///      zero in every observed state.
     function invariant_seedingProgressAccumulatorIsCleanAtRest() public view {
-        for (uint256 i = 23; i <= 26; ++i) {
+        for (uint256 i = 23; i <= 27; ++i) {
             assertEq(
                 vm.load(address(veHemi), bytes32(i)),
                 bytes32(0),

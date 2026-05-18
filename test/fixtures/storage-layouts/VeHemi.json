@@ -179,8 +179,8 @@
       "contract": "src/VeHemi.sol:VeHemi",
       "label": "__gapV2",
       "offset": 0,
-      "slot": "27",
-      "type": "t_array(t_uint256)37_storage"
+      "slot": "28",
+      "type": "t_array(t_uint256)36_storage"
     }
   ],
   "types": {
@@ -202,13 +202,13 @@
       "numberOfBytes": "128000000000",
       "value": null
     },
-    "t_array(t_uint256)37_storage": {
+    "t_array(t_uint256)36_storage": {
       "base": "t_uint256",
       "encoding": "inplace",
       "key": null,
-      "label": "uint256[37]",
+      "label": "uint256[36]",
       "members": null,
-      "numberOfBytes": "1184",
+      "numberOfBytes": "1152",
       "value": null
     },
     "t_bool": {
@@ -480,9 +480,16 @@
           "offset": 0,
           "slot": "3",
           "type": "t_uint256"
+        },
+        {
+          "contract": "src/VeHemi.sol:VeHemi",
+          "label": "minSubEnd",
+          "offset": 0,
+          "slot": "4",
+          "type": "t_uint64"
         }
       ],
-      "numberOfBytes": "128",
+      "numberOfBytes": "160",
       "value": null
     },
     "t_struct(UserPoint)_storage": {

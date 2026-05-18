@@ -12,7 +12,7 @@ import "forge-std/Test.sol";
 ///
 ///         Covers:
 ///           - Every VeHemi slot label lives at the expected absolute slot.
-///           - `__gapV2` is `uint256[37]` starting at slot 27.
+///           - `__gapV2` is `uint256[36]` starting at slot 28.
 ///           - `userPointHistory` inner array length is EXACTLY 1,000,000,000
 ///             (catches a regex that accidentally strips array lengths).
 ///           - `VeHemiAragonAdapter` has ZERO storage fields (stateless).
@@ -80,14 +80,14 @@ contract StorageLayoutGoldenTest is Test {
         _assertVeHemiEntry(22, "21", "seedingStartedAt");
         // Storage slot 22 (json entry 23): seedingTargetId (uint256).
         _assertVeHemiEntry(23, "22", "seedingTargetId");
-        // Storage slots 23-26 (json entry 24): _seedingProgress struct
-        // (4 slots — lastProcessedId, {totalSlope|totalBias} packed,
-        // {totalForfeitableSlope|totalForfeitableBias} packed, count).
+        // Storage slots 23-27 (json entry 24): _seedingProgress struct
+        // (5 slots — lastProcessedId, {totalSlope|totalBias} packed,
+        // {totalForfeitableSlope|totalForfeitableBias} packed, count, minSubEnd).
         _assertVeHemiEntry(24, "23", "_seedingProgress");
-        // Storage slot 27 (json entry 25): the __gapV2 array, shrunk to
-        // 37 slots to make room for the 6 new V2 slots above (21-26;
-        // seedingStarted + seedingStartedAt share slot 21).
-        _assertVeHemiEntry(25, "27", "__gapV2");
+        // Storage slot 28 (json entry 25): the __gapV2 array, shrunk to
+        // 36 slots to make room for the 7 new V2 slots above (21-27;
+        // seedingStarted + seedingStartedAt share slot 21; minSubEnd at slot 27).
+        _assertVeHemiEntry(25, "28", "__gapV2");
     }
 
     /// @dev Pin the byte-offset and type of the two fields that share slot 21
@@ -139,46 +139,46 @@ contract StorageLayoutGoldenTest is Test {
         assertEq(type15, "t_uint256", "__reservedSlot1 must remain uint256");
     }
 
-    /// @dev Pin the element type of __gapV2. Shrinking `uint256[37]` to
-    ///      `uint128[37]` would halve the gap footprint (18 slots) while
-    ///      the existing `numberOfBytes` check on the gap type remains
-    ///      misleading-adjacent. Catch this by asserting the base element
-    ///      type is uint256 explicitly.
+    /// @dev Pin the element type of __gapV2. Shrinking `uint256[36]` to
+    ///      `uint128[36]` would halve the gap footprint while the existing
+    ///      `numberOfBytes` check on the gap type remains misleading-adjacent.
+    ///      Catch this by asserting the base element type is uint256 explicitly.
     function test_VeHemi_GapElementIsUint256() public view {
         string memory base = vm.parseJsonString(
             veHemiJson,
-            ".types.[\"t_array(t_uint256)37_storage\"].base"
+            ".types.[\"t_array(t_uint256)36_storage\"].base"
         );
         assertEq(base, "t_uint256", "__gapV2 element type must be uint256");
     }
 
-    function test_VeHemi_GapIsExactly37Slots() public view {
+    function test_VeHemi_GapIsExactly36Slots() public view {
         // Fetch the `type` field for the __gapV2 entry (JSON index 25, which
-        // corresponds to storage slot 27), then resolve it in the `types`
-        // dictionary and assert its label is `uint256[37]`. This is the
-        // CRITICAL check: if someone shrinks __gapV2 from 37 to 36 (for
+        // corresponds to storage slot 28), then resolve it in the `types`
+        // dictionary and assert its label is `uint256[36]`. This is the
+        // CRITICAL check: if someone shrinks __gapV2 from 36 to 35 (for
         // example, while inserting a new field before the gap without
         // adjusting the gap size), this test fires. Asserts the actual
         // bytecode layout, not just a source-level arithmetic sum.
         //
-        // V2 storage now uses 6 NAMED slots beyond the original 5 V2 fields:
+        // V2 storage now uses 7 NAMED slots beyond the original 5 V2 fields:
         // slot 21 (seedingStarted+seedingStartedAt packed), slot 22
-        // (seedingTargetId), slots 23-26 (_seedingProgress).
-        // 43 (original gap) - 6 (new slots) = 37 (current gap).
+        // (seedingTargetId), slots 23-27 (_seedingProgress, 5 slots including
+        // minSubEnd).
+        // 43 (original gap) - 7 (new slots) = 36 (current gap).
         string memory gapType = vm.parseJsonString(veHemiJson, ".storage[25].type");
-        assertEq(gapType, "t_array(t_uint256)37_storage", "__gapV2 must be uint256[37]");
+        assertEq(gapType, "t_array(t_uint256)36_storage", "__gapV2 must be uint256[36]");
 
         string memory gapLabel = vm.parseJsonString(
             veHemiJson,
-            ".types.[\"t_array(t_uint256)37_storage\"].label"
+            ".types.[\"t_array(t_uint256)36_storage\"].label"
         );
-        assertEq(gapLabel, "uint256[37]", "__gapV2 type label");
+        assertEq(gapLabel, "uint256[36]", "__gapV2 type label");
 
         string memory gapBytes = vm.parseJsonString(
             veHemiJson,
-            ".types.[\"t_array(t_uint256)37_storage\"].numberOfBytes"
+            ".types.[\"t_array(t_uint256)36_storage\"].numberOfBytes"
         );
-        assertEq(gapBytes, "1184", "__gapV2 numberOfBytes (37 * 32 = 1184)");
+        assertEq(gapBytes, "1152", "__gapV2 numberOfBytes (36 * 32 = 1152)");
     }
 
     function test_VeHemi_UserPointHistoryArrayLengthIs1e9() public view {
@@ -283,19 +283,20 @@ contract StorageLayoutGoldenTest is Test {
         );
     }
 
-    /// @dev Pin the member layout of SeedingProgress — slots 23-26 hold the
+    /// @dev Pin the member layout of SeedingProgress — slots 23-27 hold the
     ///      in-progress seeding accumulator. The struct contains two packed
     ///      int128 pairs (totalSlope|totalBias and
-    ///      totalForfeitableSlope|totalForfeitableBias) with no public
-    ///      getter. A bias↔slope swap inside either pair would silently
-    ///      miscompute `_lockedBias = totalBias - totalSlope * t` in
-    ///      `finalizeSeeding` — corrupting the materialized LockedPoint
-    ///      without any test failure surface. This pins the offsets and
-    ///      types explicitly so a future reorder of declarations inside
-    ///      `struct SeedingProgress` (`VeHemiStorageV2.sol:103-110`) fails
-    ///      this assertion at CI time rather than producing a silent
-    ///      accounting bug post-seed. Parallel defense to
-    ///      `test_VeHemi_LockedPointMemberLayout` below.
+    ///      totalForfeitableSlope|totalForfeitableBias) and a uint64
+    ///      minSubEnd, with no public getter. A bias↔slope swap inside
+    ///      either pair would silently miscompute
+    ///      `_lockedBias = totalBias - totalSlope * t` in `finalizeSeeding`
+    ///      — corrupting the materialized LockedPoint without any test
+    ///      failure surface. A change to `minSubEnd`'s position or type
+    ///      would break the phantom-carry walk-back. This pins the offsets
+    ///      and types explicitly so a future reorder of declarations
+    ///      inside `struct SeedingProgress` fails this assertion at CI time
+    ///      rather than producing a silent accounting bug post-seed.
+    ///      Parallel defense to `test_VeHemi_LockedPointMemberLayout` below.
     function test_VeHemi_SeedingProgressMemberLayout() public view {
         string memory base = ".types.[\"t_struct(SeedingProgress)_storage\"].members";
         // Member 0: uint256 lastProcessedId at slot 0 offset 0.
@@ -328,6 +329,11 @@ contract StorageLayoutGoldenTest is Test {
         assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[5].slot")), "3");
         assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[5].offset")), "0");
         assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[5].type")), "t_uint256");
+        // Member 6: uint64 minSubEnd at slot 4 offset 0.
+        assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[6].label")), "minSubEnd");
+        assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[6].slot")), "4");
+        assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[6].offset")), "0");
+        assertEq(vm.parseJsonString(veHemiJson, string.concat(base, "[6].type")), "t_uint64");
     }
 
     /// @dev Pin the member layout of LockedPoint — slots 17 and 20 hold
@@ -606,7 +612,7 @@ contract StorageLayoutGoldenTest is Test {
         _assertTypeEncoding(veHemiJson, "t_mapping(t_uint256,t_int128)", "mapping");
         _assertTypeEncoding(veHemiJson, "t_mapping(t_uint256,t_address)", "mapping");
         _assertTypeEncoding(veHemiJson, "t_mapping(t_uint256,t_bool)", "mapping");
-        _assertTypeEncoding(veHemiJson, "t_array(t_uint256)37_storage", "inplace");
+        _assertTypeEncoding(veHemiJson, "t_array(t_uint256)36_storage", "inplace");
         _assertTypeEncoding(veHemiJson, "t_struct(Point)_storage", "inplace");
         _assertTypeEncoding(veHemiJson, "t_struct(LockedPoint)_storage", "inplace");
         _assertTypeEncoding(veHemiJson, "t_struct(SeedingProgress)_storage", "inplace");

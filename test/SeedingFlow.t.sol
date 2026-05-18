@@ -46,14 +46,15 @@ contract SeedingFlowTest is Test {
 
     /// @dev Slot constants for direct storage probes of `_seedingProgress`.
     ///      `_seedingProgress` lives at slot 23 (struct base = first member
-    ///      `lastProcessedId`); the `count` field lives at slot 26 (the 4th
-    ///      and final struct slot). These are pinned by
+    ///      `lastProcessedId`); `count` lives at slot 26; `minSubEnd` lives
+    ///      at slot 27 (the 5th and final struct slot). These are pinned by
     ///      `test_VeHemi_SeedingProgressMemberLayout` in `StorageLayoutGolden.t.sol`
-    ///      AND by `test_slot23to26_seedingProgressLayout` in
+    ///      AND by `test_slot23to27_seedingProgressLayout` in
     ///      `VeHemiStorageLayout.t.sol`. If a future V3 reshuffle moves the
     ///      struct, update both pins AND this constant.
     uint256 internal constant SLOT_SEEDING_PROGRESS_BASE = 23;
     uint256 internal constant SLOT_SEEDING_PROGRESS_COUNT = 26;
+    uint256 internal constant SLOT_SEEDING_PROGRESS_MIN_SUBEND = 27;
 
     event SeedingStarted(uint256 seedingTargetId);
     event LockedSeedingFinalized(uint256 epoch);
@@ -1267,35 +1268,23 @@ contract SeedingFlowTest is Test {
     ///         (burning the NFT) mid-window — must not corrupt the totals
     ///         materialized at finalize.
     ///
-    ///         The withdraw guard is intentionally absent (per VeHemi.sol's
-    ///         comment: "by the time a non-transferable position becomes
-    ///         withdrawable, `block.timestamp >= lock.end`... totals are
-    ///         insensitive to mid-window withdraws"). In production this
-    ///         scenario CANNOT occur because `MIN_LOCK_DURATION == 2 * SIX_DAYS
-    ///         ≈ 12 days` while realistic seeding windows are minutes-to-hours.
-    ///         But the contract MUST remain self-consistent if it does occur
-    ///         in a stressed test environment: per the documented constraint
-    ///         (VeHemi.sol L1377-L1391), the seeded subcurve carries the
-    ///         position past its true subEnd because the slope-change at
-    ///         `subEnd` was already written by `seedBatch` and the
-    ///         post-finalize walk starts at `tsFinal > subEnd` (so the
-    ///         walk never revisits that bucket).
+    ///         Pre-fix, the contract carried the lapsed position's slope
+    ///         forward because `lockedSlopeChanges[subEnd]` (eagerly written
+    ///         by `seedBatch`) lived at a past bucket the forward supply
+    ///         walk would never revisit. This caused
+    ///         `nonTransferableTotalVeHemiSupply` to under-count for as
+    ///         long as the carried bias took to clamp to zero.
     ///
-    ///         Concretely we pin: with one short position (subEnd just inside
-    ///         the window) and one long position, the finalized
-    ///         `nonTransferableTotalVeHemiSupply` matches the closed-form
-    ///         `slope_long * (subEnd_long - tsFinal) + slope_short *
-    ///         (subEnd_short - tsFinal)` (the latter term is NEGATIVE — the
-    ///         carried short position over-decays the curve relative to a
-    ///         hypothetical "true" subcurve where it had been excluded). The
-    ///         long position's bias dominates so total stays positive.
-    ///
-    ///         A regression that started writing per-position state to the
-    ///         accumulator on withdraw (and therefore desynced the accumulator
-    ///         from `lockedSlopeChanges`) would diverge from this closed form.
+    ///         POST-FIX (`minSubEnd` accumulator + walk-back in
+    ///         `finalizeSeeding`): the LockedPoint is materialized by
+    ///         walking from `minSubEnd` forward to `tsFinal`, consuming the
+    ///         otherwise-stranded slope-changes. The resulting subcurve
+    ///         state at `tsFinal` reflects ONLY the positions still inside
+    ///         their non-transferable window — the lapsed short position
+    ///         contributes nothing, exactly as a truthful per-position
+    ///         walk would produce.
     function test_multiBlock_withdrawOfExpiredPositionMidWindow_doesNotCorruptTotals() public {
-        // Long-lived position so totals stay positive after the short position's
-        // negative contribution is added in.
+        // Long-lived position survives the carry-fix walk.
         (, uint256 longEnd) = _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
         // Short-lived position: 2*SIX_DAYS is the minimum lock duration. Its
         // SIX_DAYS-rounded `lock.end` is roughly 12 days out.
@@ -1312,64 +1301,44 @@ contract SeedingFlowTest is Test {
         // The short position WAS recorded (lock.end > block.timestamp at scan
         // time): accumulator count == 2.
         assertEq(_progressCount(), 2, "both positions recorded by seedBatch");
+        // Earliest seeded subEnd recorded for the walk-back trigger.
+        assertEq(uint256(_progressMinSubEnd()), shortEnd, "minSubEnd captured short subEnd");
 
         // Warp PAST the short position's subEnd. Now the owner can withdraw,
         // which burns the NFT. The seedBatch-written accumulator and slope
         // change at `shortEnd` are intentionally untouched (no withdraw-side
-        // accumulator mutation exists during seeding).
+        // accumulator mutation exists during seeding) — the walk-back at
+        // finalize is what consumes them.
         vm.warp(shortEnd + 1 hours);
         vm.prank(bob);
         veHemi.withdraw(shortId);
         assertEq(veHemi.balanceOf(bob), 0, "withdraw burned the short position");
 
-        // Finalize at tsFinal > shortEnd. The materialized bias is
-        // `totalBias - totalSlope * tsFinal`, which after the short position's
-        // contribution is added equals
-        // `slope_long*(longEnd - tsFinal) + slope_short*(shortEnd - tsFinal)`.
-        // The second term is negative because tsFinal > shortEnd; the long
-        // position's positive term dominates.
+        // Finalize at tsFinal > shortEnd. The walk-back from minSubEnd
+        // consumes `lockedSlopeChanges[shortEnd]` before writing the
+        // LockedPoint, so the materialized state has only the long
+        // position's slope active.
         veHemi.finalizeSeeding();
 
         uint256 slope = LOCK_AMOUNT / MAX_TIME;
-        uint256 tsFinal = block.timestamp;
-        // Closed-form: signed sum of (subEnd - tsFinal)*slope for both seeded
-        // positions. Use int256 to handle the negative short-position term.
-        int256 expectedSigned = int256(slope) * (int256(longEnd) - int256(tsFinal))
-            + int256(slope) * (int256(shortEnd) - int256(tsFinal));
-        assertGt(expectedSigned, 0, "long-position bias must dominate the carry");
-        uint256 expected = uint256(expectedSigned);
+        uint256 expectedAtFinal = slope * (longEnd - block.timestamp);
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupply(),
-            expected,
-            "withdraw of expired position mid-window must not corrupt finalized totals"
+            expectedAtFinal,
+            "walk-back: finalized supply reflects only the surviving long position"
         );
 
-        // Post-finalize, the supply walk steps forward in SIX_DAYS buckets
-        // and applies `lockedSlopeChanges`. The walk starts at `tsFinal`, so
-        // the (already-past) `lockedSlopeChanges[shortEnd]` write is NEVER
-        // revisited — i.e., the short position's slope is "carried" past its
-        // true subEnd until the bias clamps to 0. Pin this carry by querying
-        // a future timestamp slightly before the long position's subEnd and
-        // verifying the supply equals the closed-form carry result, NOT the
-        // "true" subcurve (which would be `slope*(longEnd - queryTs)` only).
+        // 30 days later, only the long position is still decaying; the
+        // short position's slope was consumed at finalize, so the supply
+        // walk forward from tsFinal applies only the long's slope of 1
+        // (not the pre-fix carried 2). longEnd is 2y out, so no slope
+        // change fires within 30 days.
         uint256 queryTs = block.timestamp + 30 days;
-        // Closed-form post-walk: the walk consumes the slope-change at
-        // `longEnd` only if longEnd <= queryTs (it isn't — longEnd is 2y out).
-        // Between tsFinal and queryTs the active slope is `2*slope` (long +
-        // carried short). So the supply at queryTs is
-        //   bias_at_tsFinal - 2*slope*(queryTs - tsFinal)
-        // which is the closed-form continuation of the linear curve.
-        int256 carriedAtQuery = expectedSigned
-            - 2 * int256(slope) * (int256(queryTs) - int256(tsFinal));
-        // The carry can be positive or clamped to 0 by the walk's final
-        // `if (bias < 0) bias = 0`. With short ~12 days and long ~2 years,
-        // the 30-day query is well after the carry has driven bias positive
-        // (long term dominates).
-        assertGt(carriedAtQuery, 0, "long bias must still dominate at 30d query");
+        uint256 expectedAtQuery = slope * (longEnd - queryTs);
         assertEq(
             veHemi.nonTransferableTotalVeHemiSupplyAt(queryTs),
-            uint256(carriedAtQuery),
-            "post-finalize walk applies documented carry (no slope-change revisit)"
+            expectedAtQuery,
+            "walk-back: forward query agrees with truthful single-slope decay"
         );
     }
 
@@ -1400,6 +1369,268 @@ contract SeedingFlowTest is Test {
             expected,
             "transferable mid-window mint must not affect locked subcurve"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Phantom-carry mitigation: minSubEnd accumulator + walk-back in finalize
+    //
+    // The carry fires when a seeded position's subEnd falls between
+    // markSeedingStarted and finalizeSeeding. The fix tracks the earliest
+    // included subEnd in `_seedingProgress.minSubEnd` and walks the subcurve
+    // from minSubEnd forward to tsFinal in finalize, consuming the otherwise-
+    // stranded slope-change entries before writing the LockedPoint.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice Happy-path regression — when no seeded position's subEnd
+    ///         lapses during the window, the walk-back must produce the
+    ///         same LockedPoint as the direct formula. Confirms zero
+    ///         behavioral drift for well-run seedings.
+    function test_carry_happyPath_noWalkRequired() public {
+        // All positions are 2-year locks; no subEnd is close to now.
+        (, uint256 endA) = _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        (, uint256 endB) = _mintLocked(bob, LOCK_AMOUNT, LOCK_2Y);
+        (, uint256 endC) = _mintLocked(carol, LOCK_AMOUNT, LOCK_2Y);
+
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        veHemi.finalizeSeeding();
+
+        // minSubEnd is now cleared (delete _seedingProgress). Pre-clear it
+        // would equal min(endA, endB, endC). Verify the supply matches the
+        // truthful per-position sum.
+        uint256 slope = LOCK_AMOUNT / MAX_TIME;
+        uint256 expected =
+              slope * (endA - block.timestamp)
+            + slope * (endB - block.timestamp)
+            + slope * (endC - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expected,
+            "happy path: walk-back must not perturb correct totals"
+        );
+    }
+
+    /// @notice The original phantom-carry trigger: a single seeded position
+    ///         whose subEnd lapses BETWEEN seedBatch and finalize. Without
+    ///         the fix, the lapsed position's slope is "carried" past its
+    ///         true subEnd and bias decays at the wrong rate. With the fix,
+    ///         the walk-back consumes the slope-change at the lapsed subEnd
+    ///         before writing the LockedPoint.
+    function test_carry_singlePositionLapses_walkBackRestoresTruth() public {
+        // Long-lived position. Its full bias must survive.
+        (, uint256 longEnd) = _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        // Short-lived position: subEnd ~12 days out (the MIN_LOCK_DURATION
+        // floor). We'll warp past its subEnd before finalizing.
+        (, uint256 shortEnd) = _mintLocked(bob, LOCK_AMOUNT, LOCK_SHORT);
+
+        // Warp to just before short subEnd so the position is still live
+        // at markSeedingStarted time and gets included in the accumulator.
+        vm.warp(shortEnd - 1 hours);
+        assertGt(shortEnd, block.timestamp, "short must be non-expired at mark time");
+
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+
+        // Warp PAST the short position's subEnd. Phantom-carry trigger.
+        vm.warp(shortEnd + 2 hours);
+        veHemi.finalizeSeeding();
+
+        // Truth at tsFinal: only the long position contributes.
+        uint256 slope = LOCK_AMOUNT / MAX_TIME;
+        uint256 expected = slope * (longEnd - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expected,
+            "walk-back must produce truthful supply when one subEnd lapses"
+        );
+    }
+
+    /// @notice Multiple positions with staggered subEnds inside the window.
+    ///         The walk-back must consume EACH lapsed slope-change as it
+    ///         strides forward in SIX_DAYS buckets.
+    function test_carry_multipleStaggeredLapses_walkBackConsumesAll() public {
+        // One long position survives finalize.
+        (, uint256 longEnd) = _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        // Three short positions, all with similar subEnd (MIN_LOCK_DURATION
+        // rounds them to the same SIX_DAYS bucket since they're created in
+        // the same block).
+        (, uint256 shortEnd) = _mintLocked(bob, LOCK_AMOUNT, LOCK_SHORT);
+        _mintLocked(carol, LOCK_AMOUNT, LOCK_SHORT);
+        _mintLocked(attacker, LOCK_AMOUNT, LOCK_SHORT);
+
+        vm.warp(shortEnd - 1 hours);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+        assertEq(_progressCount(), 4, "all four positions included");
+
+        vm.warp(shortEnd + 2 hours);
+        veHemi.finalizeSeeding();
+
+        uint256 slope = LOCK_AMOUNT / MAX_TIME;
+        uint256 expected = slope * (longEnd - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expected,
+            "walk-back must consume all stranded slope-changes"
+        );
+    }
+
+    /// @notice Edge: every seeded position's subEnd lapses inside the
+    ///         window. The subcurve must be exactly zero post-finalize
+    ///         (no carry, no negative residue).
+    function test_carry_allPositionsLapse_subcurveIsZero() public {
+        (, uint256 endA) = _mintLocked(alice, LOCK_AMOUNT, LOCK_SHORT);
+        _mintLocked(bob, LOCK_AMOUNT, LOCK_SHORT);
+        _mintLocked(carol, LOCK_AMOUNT, LOCK_SHORT);
+
+        vm.warp(endA - 1 hours);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+
+        vm.warp(endA + 1 hours);
+        veHemi.finalizeSeeding();
+
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            0,
+            "all-lapsed: subcurve must clamp to 0 cleanly"
+        );
+    }
+
+    /// @notice Forfeitable subcurve must walk back independently of locked.
+    ///         A forfeitable position that lapses during the window must
+    ///         also be correctly removed from the forfeitable subcurve.
+    function test_carry_forfeitablePositionLapses_walkBackOnBothCurves() public {
+        (, uint256 longEnd) = _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        (, uint256 shortEnd) = _mintForfeitable(bob, LOCK_AMOUNT, LOCK_SHORT);
+
+        vm.warp(shortEnd - 1 hours);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+
+        vm.warp(shortEnd + 2 hours);
+        veHemi.finalizeSeeding();
+
+        // Locked: only the long survives.
+        uint256 slope = LOCK_AMOUNT / MAX_TIME;
+        uint256 expectedLocked = slope * (longEnd - block.timestamp);
+        assertEq(
+            veHemi.nonTransferableTotalVeHemiSupply(),
+            expectedLocked,
+            "walk-back: locked subcurve correct after forfeitable lapse"
+        );
+        // Forfeitable: zero (the only forfeitable position lapsed).
+        assertEq(
+            veHemi.forfeitableTotalVeHemiSupply(),
+            0,
+            "walk-back: forfeitable subcurve correct after lapse"
+        );
+    }
+
+    /// @notice The skip predicate at seedBatch line 1280-1287 must filter
+    ///         out positions whose subEnd is ALREADY in the past at scan
+    ///         time. Such positions never enter the accumulator AND never
+    ///         influence minSubEnd. Verify by mixing one already-lapsed
+    ///         position (filtered) with one in-window position (tracked).
+    function test_carry_minSubEnd_ignoresFilteredPositions() public {
+        // Position A: subEnd will be in the past at seedBatch time.
+        (, uint256 lapsedEnd) = _mintLocked(alice, LOCK_AMOUNT, LOCK_SHORT);
+        // Position B: subEnd well in the future.
+        (, uint256 farEnd) = _mintLocked(bob, LOCK_AMOUNT, LOCK_2Y);
+
+        // Warp past A's subEnd. A is now filtered by seedBatch's skip
+        // (transferableAfter <= block.timestamp).
+        vm.warp(lapsedEnd + 1 hours);
+
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+
+        // minSubEnd should equal farEnd (B), not lapsedEnd (A).
+        uint64 minSubEnd = _progressMinSubEnd();
+        assertEq(uint256(minSubEnd), farEnd, "minSubEnd must reflect INCLUDED set only");
+        assertEq(_progressCount(), 1, "only B was included");
+    }
+
+    /// @notice minSubEnd must converge to the global minimum across many
+    ///         seedBatch calls. Each batch flushes its local min via
+    ///         compare-and-swap into the persistent accumulator.
+    function test_carry_minSubEnd_convergesAcrossMultipleBatches() public {
+        // Five positions, varying subEnds. The minimum subEnd is in the
+        // middle of the id range, so a single batch covering the range
+        // and multiple smaller batches must produce the same final min.
+        (, uint256 e1) = _mintLocked(_user(1), LOCK_AMOUNT, LOCK_2Y);
+        (, uint256 e2) = _mintLocked(_user(2), LOCK_AMOUNT, LOCK_3Y); // larger subEnd
+        (, uint256 e3) = _mintLocked(_user(3), LOCK_AMOUNT, LOCK_SHORT); // smallest subEnd
+        (, uint256 e4) = _mintLocked(_user(4), LOCK_AMOUNT, LOCK_3Y);
+        (, uint256 e5) = _mintLocked(_user(5), LOCK_AMOUNT, LOCK_2Y);
+
+        // Expected global min.
+        uint256 expectedMin = e3;
+        // Sanity: other ends are larger.
+        assertGt(e1, expectedMin, "sanity");
+        assertGt(e2, expectedMin, "sanity");
+        assertGt(e4, expectedMin, "sanity");
+        assertGt(e5, expectedMin, "sanity");
+
+        veHemi.markSeedingStarted();
+
+        // Three batches of varying size, with block boundaries between.
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        veHemi.seedBatch(2); // ids 1-2: min so far = min(e1, e2) = e1
+        assertEq(uint256(_progressMinSubEnd()), e1, "batch1: min = e1");
+
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        veHemi.seedBatch(2); // ids 3-4: includes e3 (smallest); new min = e3
+        assertEq(uint256(_progressMinSubEnd()), expectedMin, "batch2: min drops to e3");
+
+        vm.warp(block.timestamp + 12);
+        vm.roll(block.number + 1);
+        veHemi.seedBatch(2); // id 5: e5 > e3, no change
+        assertEq(uint256(_progressMinSubEnd()), expectedMin, "batch3: min unchanged");
+    }
+
+    /// @notice An empty seedBatch (all positions filtered, or zero
+    ///         iterations) MUST NOT corrupt the persistent minSubEnd.
+    function test_carry_minSubEnd_emptyBatchPreservesPersistentMin() public {
+        _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+
+        veHemi.markSeedingStarted();
+        // First batch includes the position.
+        veHemi.seedBatch(1);
+        uint64 minAfterFirst = _progressMinSubEnd();
+        assertGt(uint256(minAfterFirst), 0, "first batch sets min");
+
+        // Second batch is a no-op (cursor at target).
+        veHemi.seedBatch(type(uint256).max);
+        assertEq(_progressMinSubEnd(), minAfterFirst, "empty batch must not touch min");
+
+        // Zero-maxIterations batch: also a no-op.
+        veHemi.seedBatch(0);
+        assertEq(_progressMinSubEnd(), minAfterFirst, "zero-iter batch must not touch min");
+    }
+
+    /// @notice Cross-check: after finalize, querying the supply via
+    ///         `nonTransferableTotalVeHemiSupplyAt(tsFinal)` must produce
+    ///         the same value as the freshly-materialized LockedPoint.
+    ///         Pins the walk-back's self-consistency between finalize and
+    ///         subsequent reads.
+    function test_carry_finalizeOutputMatchesSubsequentQuery() public {
+        _mintLocked(alice, LOCK_AMOUNT, LOCK_2Y);
+        (, uint256 shortEnd) = _mintLocked(bob, LOCK_AMOUNT, LOCK_SHORT);
+
+        vm.warp(shortEnd - 30 minutes);
+        veHemi.markSeedingStarted();
+        veHemi.seedBatch(type(uint256).max);
+
+        vm.warp(shortEnd + 30 minutes);
+        veHemi.finalizeSeeding();
+        uint256 tsFinal = block.timestamp;
+
+        uint256 atFinalizeTs = veHemi.nonTransferableTotalVeHemiSupplyAt(tsFinal);
+        uint256 atNow = veHemi.nonTransferableTotalVeHemiSupply();
+        assertEq(atFinalizeTs, atNow, "current supply must match supply-at-tsFinal query");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1442,12 +1673,13 @@ contract SeedingFlowTest is Test {
     }
 
     // ─── Direct storage probes into _seedingProgress ────────────────────
-    // The struct lives at VeHemi storage slot 23 (4 packed slots: 23-26).
+    // The struct lives at VeHemi storage slot 23 (5 packed slots: 23-27).
     // Layout:
     //   slot 23: lastProcessedId (uint256)
     //   slot 24: totalSlope (int128, low) | totalBias (int128, high)
     //   slot 25: totalForfeitableSlope (int128, low) | totalForfeitableBias (int128, high)
     //   slot 26: count (uint256)
+    //   slot 27: minSubEnd (uint64, low; upper 24 bytes reserved)
 
     function _progressLastProcessedId() internal view returns (uint256) {
         return uint256(vm.load(address(veHemi), bytes32(SLOT_SEEDING_PROGRESS_BASE)));
@@ -1455,5 +1687,9 @@ contract SeedingFlowTest is Test {
 
     function _progressCount() internal view returns (uint256) {
         return uint256(vm.load(address(veHemi), bytes32(SLOT_SEEDING_PROGRESS_COUNT)));
+    }
+
+    function _progressMinSubEnd() internal view returns (uint64) {
+        return uint64(uint256(vm.load(address(veHemi), bytes32(SLOT_SEEDING_PROGRESS_MIN_SUBEND))));
     }
 }
